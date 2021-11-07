@@ -399,16 +399,32 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 			// kline.GetLowerShadowRatio()
 		}
 
-		// TODO: 1) Find the previous top and then find the bottom of the previous top
 		dataStore, ok := session.MarketDataStore(s.Symbol)
 		if !ok {
 			log.Errorf("market data store %s does not exist", s.Symbol)
 			return
 		}
 
+		// 1) Find the previous top and then find the bottom of the previous top
 		kLines := dataStore.KLineWindows[s.Interval]
-		tops := findTopKLine(kLines, 10)
-		_ = tops
+		if s.grid == nil {
+			topIndexes := findTopKLine(kLines, 10)
+			if len(topIndexes) == 0 {
+				log.Warnf("no any top found")
+				return
+			}
+
+			bottomIndexes := findBottomKLinesFrom(kLines, 10, topIndexes[0])
+			if len(bottomIndexes) == 0 {
+				log.Warnf("no any bottom found")
+				return
+			}
+
+			bottomKLine := kLines[bottomIndexes[0]]
+			upperPrice := fixedpoint.NewFromFloat(bottomKLine.Low)
+			lowerPrice := fixedpoint.NewFromFloat(kline.Low)
+			s.grid = NewGrid(lowerPrice, upperPrice, fixedpoint.NewFromInt(s.GridNum))
+		}
 
 		// TODO: 2) Allocate grid object here
 
@@ -430,9 +446,36 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 	return nil
 }
 
-func findTopKLine(kLines types.KLineWindow, window int) (tops []types.KLine) {
+func findBottomKLinesFrom(kLines types.KLineWindow, window, offset int) (indexes []int) {
+	if len(kLines) < window + offset {
+		return indexes
+	}
+
+NextKLine:
+	for i := offset; i > window ; i-- {
+		cur := kLines[i]
+		for j := 1; j < window ; j++ {
+			left := kLines[i - j]
+			if left.Low < cur.Low {
+				continue NextKLine
+			}
+
+			right := kLines[i + j]
+			if right.Low < cur.Low {
+				continue NextKLine
+			}
+		}
+
+		// if we get here, it means it's the local top
+		indexes = append(indexes, i)
+	}
+
+	return indexes
+}
+
+func findTopKLine(kLines types.KLineWindow, window int) (indexes []int) {
 	if len(kLines) < window {
-		return tops
+		return indexes
 	}
 
 NextKLine:
@@ -451,8 +494,8 @@ NextKLine:
 		}
 
 		// if we get here, it means it's the local top
-		tops = append(tops, cur)
+		indexes = append(indexes, i)
 	}
 
-	return tops
+	return indexes
 }
