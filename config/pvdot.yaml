@@ -1,0 +1,21 @@
+---
+notifications:
+  slack:
+    defaultChannel: "bbgo"
+    errorChannel: "bbgo-error"
+
+exchangeStrategies:
+  - on: max
+    pvdot:
+      window: 720
+      interval: 1m
+      baseCurrency: TWD
+      quoteCurrencies:
+       - BTC
+       - ETH
+      ignoreLocked: true
+      threshold: 2%
+      # max amount to buy or sell per order
+      maxAmount: 10_000
+      verbose: true
+      dryRun: true
