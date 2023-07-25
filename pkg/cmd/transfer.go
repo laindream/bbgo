@@ -47,19 +47,9 @@ var TransferHistoryCmd = &cobra.Command{
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
-
-		configFile, err := cmd.Flags().GetString("config")
-		if err != nil {
-			return err
-		}
-
-		userConfig, err := bbgo.Load(configFile, false)
-		if err != nil {
-			return err
-		}
-
 		environ := bbgo.NewEnvironment()
-		if err := bbgo.BootstrapEnvironment(ctx, environ, userConfig); err != nil {
+
+		if err := environ.ConfigureExchangeSessions(userConfig); err != nil {
 			return err
 		}
 
@@ -107,10 +97,13 @@ var TransferHistoryCmd = &cobra.Command{
 			return fmt.Errorf("exchange session %s does not implement transfer service", sessionName)
 		}
 
+		logrus.Infof("querying deposit history...")
+
 		deposits, err := exchange.QueryDepositHistory(ctx, asset, since, until)
 		if err != nil {
 			return err
 		}
+
 		for _, d := range deposits {
 			records = append(records, timeRecord{
 				Record: d,
