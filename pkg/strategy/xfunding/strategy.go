@@ -1096,7 +1096,7 @@ func (s *Strategy) allocateOrderExecutor(ctx context.Context, session *bbgo.Exch
 
 		if profit, netProfit, madeProfit := s.NeutralPosition.AddTrade(trade); madeProfit {
 			p := s.NeutralPosition.NewProfit(trade, profit, netProfit)
-			s.ProfitStats.AddProfit(p)
+			s.ProfitStats.AddProfit(&p)
 		}
 	})
 	return orderExecutor
