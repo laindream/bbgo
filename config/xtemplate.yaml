@@ -1,0 +1,14 @@
+---
+sessions:
+  max:
+    exchange: max
+    envVarPrefix: max
+
+  binance:
+    exchange: binance
+    envVarPrefix: binance
+
+crossExchangeStrategies:
+  - xtemplate:
+      symbol: BTCUSDT
+      interval: 1m
