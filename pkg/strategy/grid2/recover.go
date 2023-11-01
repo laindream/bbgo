@@ -144,14 +144,14 @@ func (s *Strategy) recover(ctx context.Context) error {
 
 	s.logger.Info("[Recover] start recovering")
 
-	if s.getGrid() == nil {
-		s.setGrid(s.newGrid())
-	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	pins := s.getGrid().Pins
+	if s.grid == nil {
+		s.grid = s.newGrid()
+	}
+
+	pins := s.grid.Pins
 
 	syncBefore := time.Now().Add(syncWindow)
 
@@ -191,20 +191,26 @@ func (s *Strategy) recover(ctx context.Context) error {
 
 		// case 2
 		if activeOrderID == 0 {
+			order := openOrder.GetOrder()
 			// only sync the open order which update_at is 3 min ago.
-			if openOrder.GetOrder().UpdateTime.Before(syncBefore) {
-				activeOrderBook.Add(openOrder.GetOrder())
+			if order.UpdateTime.Before(syncBefore) {
+				activeOrderBook.Add(order)
 				// also add open orders into active order's twin orderbook, we will use this active orderbook to recover empty price grid
-				activeOrdersInTwinOrderBook.AddTwinOrder(v, openOrder)
+				activeOrdersInTwinOrderBook.AddOrder(order)
+			} else {
+				s.logger.Infof("[Recover] skip handle open order #%d, because the updated_at is in 3 min", order.OrderID)
 			}
 			continue
 		}
 
 		// case 3
 		if openOrderID == 0 {
+			order := activeOrder.GetOrder()
 			// only sync the active order which update_at is 3 min ago.
-			if activeOrder.GetOrder().UpdateTime.Before(syncBefore) {
-				syncActiveOrder(ctx, activeOrderBook, s.orderQueryService, activeOrder.GetOrder().OrderID)
+			if order.UpdateTime.Before(syncBefore) {
+				syncActiveOrder(ctx, activeOrderBook, s.orderQueryService, order.OrderID)
+			} else {
+				s.logger.Infof("[Recover] skip handle active order #%d, because the updated_at is in 3 min", order.OrderID)
 			}
 			continue
 		}
@@ -219,6 +225,7 @@ func (s *Strategy) recover(ctx context.Context) error {
 	}
 
 	s.logger.Infof("[Recover] twin orderbook after adding open orders\n%s", activeOrdersInTwinOrderBook.String())
+	s.logger.Infof("[Recover] pins without twin orders: %+v", noTwinOrderPins)
 
 	if len(noTwinOrderPins) != 0 {
 		if err := s.recoverEmptyGridOnTwinOrderBook(ctx, activeOrdersInTwinOrderBook, historyService, s.orderQueryService); err != nil {
@@ -405,7 +412,8 @@ func queryTradesToUpdateTwinOrderBook(
 			fromTradeID = trade.ID + 1
 
 			if err := twinOrderBook.AddOrder(*order); err != nil {
-				return errors.Wrapf(err, "failed to add queried order into twin orderbook")
+				logger("[Recover] failed to add queried order into twin orderbook: %s", order.String())
+				continue
 			}
 		}
 
