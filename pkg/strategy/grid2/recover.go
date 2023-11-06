@@ -196,7 +196,7 @@ func (s *Strategy) recover(ctx context.Context) error {
 			if order.UpdateTime.Before(syncBefore) {
 				activeOrderBook.Add(order)
 				// also add open orders into active order's twin orderbook, we will use this active orderbook to recover empty price grid
-				activeOrdersInTwinOrderBook.AddOrder(order)
+				activeOrdersInTwinOrderBook.AddOrder(order, true)
 			} else {
 				s.logger.Infof("[Recover] skip handle open order #%d, because the updated_at is in 3 min", order.OrderID)
 			}
@@ -326,7 +326,7 @@ func buildTwinOrderBook(pins []Pin, orders []types.Order) (*TwinOrderBook, error
 	book := newTwinOrderBook(pins)
 
 	for _, order := range orders {
-		if err := book.AddOrder(order); err != nil {
+		if err := book.AddOrder(order, true); err != nil {
 			return nil, err
 		}
 	}
@@ -411,7 +411,7 @@ func queryTradesToUpdateTwinOrderBook(
 			// add 1 to avoid duplicate
 			fromTradeID = trade.ID + 1
 
-			if err := twinOrderBook.AddOrder(*order); err != nil {
+			if err := twinOrderBook.AddOrder(*order, true); err != nil {
 				logger("[Recover] failed to add queried order into twin orderbook: %s", order.String())
 				continue
 			}

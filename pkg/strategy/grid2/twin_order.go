@@ -220,7 +220,7 @@ func (b *TwinOrderBook) GetTwinOrderPin(order types.Order) (fixedpoint.Value, er
 	return b.pins[idx], nil
 }
 
-func (b *TwinOrderBook) AddOrder(order types.Order) error {
+func (b *TwinOrderBook) AddOrder(order types.Order, checkUpdateTime bool) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -241,7 +241,12 @@ func (b *TwinOrderBook) AddOrder(order types.Order) error {
 	// Exist == false means there is no twin order on this pin
 	if !twinOrder.Exist() {
 		b.size++
+	} else {
+		if checkUpdateTime && twinOrder.GetOrder().UpdateTime.After(order.UpdateTime.Time()) {
+			return nil
+		}
 	}
+
 	if b.size >= len(b.pins) {
 		return fmt.Errorf("the maximum size of twin orderbook is len(pins) - 1, need to check it")
 	}
