@@ -9,6 +9,10 @@ import (
 	"github.com/c9s/bbgo/pkg/types"
 )
 
+type cancelOrdersByGroupIDApi interface {
+	CancelOrdersByGroupID(ctx context.Context, groupID int64) ([]types.Order, error)
+}
+
 func (s *Strategy) placeDCAOrders(ctx context.Context) error {
 	s.logger.Infof("[DCA] start placing maker orders")
 	price, err := s.getBestPriceUntilSuccess(ctx, s.Short)
@@ -117,4 +121,25 @@ func calculateDCAMakerOrderNotionalAndNum(market types.Market, short bool, budge
 	}
 
 	return fixedpoint.Zero, 0
+}
+
+func (s *Strategy) cancelMakerOrders(ctx context.Context) error {
+	s.logger.Info("[DCA] cancel maker orders")
+	e, ok := s.Session.Exchange.(cancelOrdersByGroupIDApi)
+	if ok {
+		cancelledOrders, err := e.CancelOrdersByGroupID(ctx, int64(s.OrderGroupID))
+		if err != nil {
+			return err
+		}
+
+		for _, cancelledOrder := range cancelledOrders {
+			s.logger.Info("CANCEL ", cancelledOrder.String())
+		}
+	} else {
+		if err := s.OrderExecutor.ActiveMakerOrders().GracefulCancel(ctx, s.Session.Exchange); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
