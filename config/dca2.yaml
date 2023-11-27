@@ -23,7 +23,7 @@ exchangeStrategies:
   dca2:
     symbol: ETHUSDT
     short: false
-    budget: 5000
+    budget: 500
     maxOrderNum: 10
     priceDeviation: 1%
     takeProfitRatio: 1%

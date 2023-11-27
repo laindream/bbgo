@@ -54,6 +54,8 @@ type Strategy struct {
 	takeProfitSide       types.SideType
 	takeProfitPrice      fixedpoint.Value
 	startTimeOfNextRound time.Time
+	nextStateC           chan State
+	state                State
 }
 
 func (s *Strategy) ID() string {
@@ -103,6 +105,7 @@ func (s *Strategy) Subscribe(session *bbgo.ExchangeSession) {
 func (s *Strategy) Run(ctx context.Context, _ bbgo.OrderExecutor, session *bbgo.ExchangeSession) error {
 	s.Strategy.Initialize(ctx, s.Environment, session, s.Market, ID, s.InstanceID())
 	instanceID := s.InstanceID()
+	s.nextStateC = make(chan State, 1)
 
 	if s.Short {
 		s.openPositionSide = types.SideTypeSell
@@ -118,19 +121,54 @@ func (s *Strategy) Run(ctx context.Context, _ bbgo.OrderExecutor, session *bbgo.
 
 	// order executor
 	s.OrderExecutor.TradeCollector().OnPositionUpdate(func(position *types.Position) {
-		s.logger.Infof("position: %s", s.Position.String())
+		s.logger.Infof("[DCA] POSITION: %s", s.Position.String())
 		bbgo.Sync(ctx, s)
 
 		// update take profit price here
+		takeProfitRatio := s.TakeProfitRatio
+		if s.Short {
+			takeProfitRatio = takeProfitRatio.Neg()
+		}
+		s.takeProfitPrice = s.Market.TruncatePrice(position.AverageCost.Mul(fixedpoint.One.Add(takeProfitRatio)))
+	})
+
+	s.OrderExecutor.ActiveMakerOrders().OnFilled(func(o types.Order) {
+		s.logger.Infof("[DCA] FILLED ORDER: %s", o.String())
+
+		switch o.Side {
+		case s.openPositionSide:
+			s.nextStateC <- OpenPositionOrderFilled
+		case s.takeProfitSide:
+			s.nextStateC <- TakeProfitOrderFilled
+		}
 	})
 
 	session.MarketDataStream.OnKLine(func(kline types.KLine) {
 		// check price here
+		s.logger.Infof("[DCA] KLINE: %s", kline.String())
+
+		// because we subscribe 1m kline, it will close every 1 min
+		// we use it as ticker to maker WaitToOpenPosition -> OpenPositionReady
+		if kline.Closed {
+			s.nextStateC <- OpenPositionReady
+		}
+
+		if s.state != OpenPositionOrderFilled {
+			return
+		}
+
+		compRes := kline.Close.Compare(s.takeProfitPrice)
+		// price doesn't hit the take profit price
+		if (s.Short && compRes > 0) || (!s.Short && compRes < 0) {
+			return
+		}
+
+		s.nextStateC <- OpenPositionOrdersCancelled
 	})
 
 	session.UserDataStream.OnAuth(func() {
-		s.logger.Info("user data stream authenticated, start the process")
-		// decide state here
+		s.logger.Info("[DCA] user data stream authenticated")
+		s.nextStateC <- WaitToOpenPosition
 	})
 
 	balances, err := session.Exchange.QueryAccountBalances(ctx)
@@ -142,6 +180,8 @@ func (s *Strategy) Run(ctx context.Context, _ bbgo.OrderExecutor, session *bbgo.
 	if balance.Available.Compare(s.Budget) < 0 {
 		return fmt.Errorf("the available balance of %s is %s which is less than budget setting %s, please check it", s.Market.QuoteCurrency, balance.Available, s.Budget)
 	}
+
+	go s.runState(ctx)
 
 	return nil
 }
