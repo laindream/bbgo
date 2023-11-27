@@ -54,6 +54,7 @@ type Strategy struct {
 	takeProfitSide       types.SideType
 	takeProfitPrice      fixedpoint.Value
 	startTimeOfNextRound time.Time
+	state                State
 }
 
 func (s *Strategy) ID() string {
@@ -119,18 +120,62 @@ func (s *Strategy) Run(ctx context.Context, _ bbgo.OrderExecutor, session *bbgo.
 
 	// order executor
 	s.OrderExecutor.TradeCollector().OnPositionUpdate(func(position *types.Position) {
-		s.logger.Infof("position: %s", s.Position.String())
+		s.logger.Infof("[DCA] POSITION: %s", s.Position.String())
 		bbgo.Sync(ctx, s)
 
 		// update take profit price here
+		takeProfitRatio := s.TakeProfitRatio
+		if s.Short {
+			takeProfitRatio = takeProfitRatio.Neg()
+		}
+		s.takeProfitPrice = s.Market.TruncatePrice(position.AverageCost.Mul(fixedpoint.One.Add(takeProfitRatio)))
+	})
+
+	s.OrderExecutor.ActiveMakerOrders().OnFilled(func(o types.Order) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		s.logger.Infof("[DCA] FILLED ORDER: %s", o.String())
+
+		if o.Side == s.makerSide {
+			if s.state != MakerReady && s.state != MakerFilled {
+				s.logger.Errorf("recive filled maker order when state is %d, please check it", s.state)
+				return
+			}
+
+			s.state = MakerFilled
+			return
+		}
+
+		if o.Side == s.takeProfitSide {
+			if s.state != TakeProfitReady {
+				s.logger.Errorf("receive filled take profit order when state is %d, please check it", s.state)
+				return
+			}
+
+			// refresh budget
+			if s.Short {
+				s.Budget = s.Budget.Add(s.Position.Base)
+			} else {
+				s.Budget = s.Budget.Add(s.Position.Quote)
+			}
+
+			// set the start time of the next round
+			s.startTimeOfNextRound = time.Now().Add(s.CoolDownInterval.Duration())
+
+			// reset position
+			s.Position.Reset()
+			s.state = WaitToOpenMaker
+		}
 	})
 
 	session.MarketDataStream.OnKLine(func(kline types.KLine) {
 		// check price here
+		s.logger.Infof("[DCA] KLINE: %s", kline.String())
 	})
 
 	session.UserDataStream.OnAuth(func() {
-		s.logger.Info("user data stream authenticated, start the process")
+		s.logger.Info("[DCA] user data stream authenticated")
 		// decide state here
 	})
 

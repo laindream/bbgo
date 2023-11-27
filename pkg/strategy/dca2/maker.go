@@ -48,6 +48,7 @@ func (s *Strategy) getBestPriceUntilSuccess(ctx context.Context, short bool) (fi
 			return ticker.Sell, nil
 		}
 
+		// avoid DDOS
 		time.Sleep(1 * time.Second)
 	}
 
