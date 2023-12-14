@@ -551,6 +551,7 @@ var BacktestCmd = &cobra.Command{
 					continue
 				}
 
+				tradeState := sessionTradeStats[session.Name][symbol]
 				profitFactor := tradeState.ProfitFactor
 				winningRatio := tradeState.WinningRatio
 				intervalProfits := tradeState.IntervalProfits[types.Interval1d]
