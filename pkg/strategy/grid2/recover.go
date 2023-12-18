@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 
 	"github.com/c9s/bbgo/pkg/bbgo"
 	maxapi "github.com/c9s/bbgo/pkg/exchange/max/maxapi"
@@ -231,7 +232,7 @@ func (s *Strategy) recoverEmptyGridOnTwinOrderBook(
 	}
 
 	for {
-		if err := queryTradesToUpdateTwinOrderBook(ctx, s.Symbol, twinOrderBook, queryTradesService, queryOrderService, existedOrders, since, until, s.debugLog); err != nil {
+		if err := queryTradesToUpdateTwinOrderBook(ctx, s.Symbol, twinOrderBook, queryTradesService, queryOrderService, existedOrders, since, until, s.logger); err != nil {
 			return errors.Wrapf(err, "failed to query trades to update twin orderbook")
 		}
 
@@ -307,7 +308,7 @@ func queryTradesToUpdateTwinOrderBook(
 	queryOrderService types.ExchangeOrderQueryService,
 	existedOrders *types.SyncOrderMap,
 	since, until time.Time,
-	logger func(format string, args ...interface{}),
+	logger logrus.FieldLogger,
 ) error {
 	if twinOrderBook == nil {
 		return fmt.Errorf("twin orderbook should not be nil, please check it")
@@ -328,7 +329,7 @@ func queryTradesToUpdateTwinOrderBook(
 		}
 
 		if logger != nil {
-			logger("QueryTrades from %s <-> %s (from: %d) return %d trades", since, until, fromTradeID, len(trades))
+			logger.Debugf("QueryTrades from %s <-> %s (from: %d) return %d trades", since, until, fromTradeID, len(trades))
 		}
 
 		for _, trade := range trades {
@@ -337,7 +338,7 @@ func queryTradesToUpdateTwinOrderBook(
 			}
 
 			if logger != nil {
-				logger(trade.String())
+				logger.Debugf(trade.String())
 			}
 
 			if existedOrders.Exists(trade.OrderID) {
@@ -354,7 +355,7 @@ func queryTradesToUpdateTwinOrderBook(
 			}
 
 			if logger != nil {
-				logger(order.String())
+				logger.Debugf(order.String())
 			}
 			// avoid query this order again
 			existedOrders.Add(*order)
