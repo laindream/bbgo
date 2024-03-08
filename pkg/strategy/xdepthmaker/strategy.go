@@ -14,6 +14,7 @@ import (
 	"github.com/c9s/bbgo/pkg/bbgo"
 	"github.com/c9s/bbgo/pkg/exchange/retry"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
+	"github.com/c9s/bbgo/pkg/strategy/common"
 	"github.com/c9s/bbgo/pkg/types"
 	"github.com/c9s/bbgo/pkg/util"
 )
@@ -181,6 +182,8 @@ type Strategy struct {
 	// MaxExposurePosition defines the unhedged quantity of stop
 	MaxExposurePosition fixedpoint.Value `json:"maxExposurePosition"`
 
+	DisableHedge bool `json:"disableHedge"`
+
 	NotifyTrade bool `json:"notifyTrade"`
 
 	// RecoverTrade tries to find the missing trades via the REStful API
@@ -192,6 +195,8 @@ type Strategy struct {
 
 	// Pips is the pips of the layer prices
 	Pips fixedpoint.Value `json:"pips"`
+
+	ProfitFixerConfig *common.ProfitFixerConfig `json:"profitFixer"`
 
 	// --------------------------------
 	// private fields
@@ -265,11 +270,11 @@ func (s *Strategy) Validate() error {
 
 func (s *Strategy) Defaults() error {
 	if s.UpdateInterval == 0 {
-		s.UpdateInterval = types.Duration(time.Second)
+		s.UpdateInterval = types.Duration(5 * time.Second)
 	}
 
 	if s.FullReplenishInterval == 0 {
-		s.FullReplenishInterval = types.Duration(15 * time.Minute)
+		s.FullReplenishInterval = types.Duration(10 * time.Minute)
 	}
 
 	if s.HedgeInterval == 0 {
@@ -315,7 +320,47 @@ func (s *Strategy) CrossRun(
 
 	log.Infof("makerSession: %s hedgeSession: %s", makerSession.Name, hedgeSession.Name)
 
-	if err := s.CrossExchangeMarketMakingStrategy.Initialize(ctx, s.Environment, makerSession, hedgeSession, s.Symbol, ID, s.InstanceID()); err != nil {
+	if s.ProfitFixerConfig != nil {
+		bbgo.Notify("Fixing %s profitStats and position...", s.Symbol)
+
+		log.Infof("profitFixer is enabled, checking checkpoint: %+v", s.ProfitFixerConfig.TradesSince)
+
+		if s.ProfitFixerConfig.TradesSince.Time().IsZero() {
+			return errors.New("tradesSince time can not be zero")
+		}
+
+		makerMarket, _ := makerSession.Market(s.Symbol)
+		s.CrossExchangeMarketMakingStrategy.Position = types.NewPositionFromMarket(makerMarket)
+		s.CrossExchangeMarketMakingStrategy.ProfitStats = types.NewProfitStats(makerMarket)
+
+		fixer := common.NewProfitFixer()
+		if ss, ok := makerSession.Exchange.(types.ExchangeTradeHistoryService); ok {
+			log.Infof("adding makerSession %s to profitFixer", makerSession.Name)
+			fixer.AddExchange(makerSession.Name, ss)
+		}
+
+		if ss, ok := hedgeSession.Exchange.(types.ExchangeTradeHistoryService); ok {
+			log.Infof("adding hedgeSession %s to profitFixer", hedgeSession.Name)
+			fixer.AddExchange(hedgeSession.Name, ss)
+		}
+
+		if err2 := fixer.Fix(ctx, makerMarket.Symbol,
+			s.ProfitFixerConfig.TradesSince.Time(),
+			time.Now(),
+			s.CrossExchangeMarketMakingStrategy.ProfitStats,
+			s.CrossExchangeMarketMakingStrategy.Position); err2 != nil {
+			return err2
+		}
+
+		bbgo.Notify("Fixed %s position", s.Symbol, s.CrossExchangeMarketMakingStrategy.Position)
+		bbgo.Notify("Fixed %s profitStats", s.Symbol, s.CrossExchangeMarketMakingStrategy.ProfitStats)
+	}
+
+	if err := s.CrossExchangeMarketMakingStrategy.Initialize(ctx,
+		s.Environment,
+		makerSession,
+		hedgeSession,
+		s.Symbol, ID, s.InstanceID()); err != nil {
 		return err
 	}
 
@@ -324,13 +369,13 @@ func (s *Strategy) CrossRun(
 
 	s.stopC = make(chan struct{})
 
-	if s.RecoverTrade {
-		// go s.runTradeRecover(ctx)
-	}
-
-	s.authedC = make(chan struct{}, 2)
+	s.authedC = make(chan struct{}, 5)
 	bindAuthSignal(ctx, s.makerSession.UserDataStream, s.authedC)
 	bindAuthSignal(ctx, s.hedgeSession.UserDataStream, s.authedC)
+
+	if s.RecoverTrade {
+		go s.runTradeRecover(ctx)
+	}
 
 	go func() {
 		log.Infof("waiting for user data stream to get authenticated")
@@ -422,7 +467,9 @@ func (s *Strategy) CrossRun(
 						uncoverPosition,
 					)
 
-					s.Hedge(ctx, uncoverPosition.Neg())
+					if !s.DisableHedge {
+						s.Hedge(ctx, uncoverPosition.Neg())
+					}
 				}
 			}
 		}
@@ -578,16 +625,14 @@ func (s *Strategy) runTradeRecover(ctx context.Context) {
 		case <-tradeScanTicker.C:
 			log.Infof("scanning trades from %s ago...", tradeScanInterval)
 
-			if s.RecoverTrade {
-				startTime := time.Now().Add(-tradeScanInterval).Add(-tradeScanOverlapBufferPeriod)
+			startTime := time.Now().Add(-tradeScanInterval).Add(-tradeScanOverlapBufferPeriod)
 
-				if err := s.HedgeOrderExecutor.TradeCollector().Recover(ctx, s.hedgeSession.Exchange.(types.ExchangeTradeHistoryService), s.Symbol, startTime); err != nil {
-					log.WithError(err).Errorf("query trades error")
-				}
+			if err := s.HedgeOrderExecutor.TradeCollector().Recover(ctx, s.hedgeSession.Exchange.(types.ExchangeTradeHistoryService), s.Symbol, startTime); err != nil {
+				log.WithError(err).Errorf("query trades error")
+			}
 
-				if err := s.MakerOrderExecutor.TradeCollector().Recover(ctx, s.makerSession.Exchange.(types.ExchangeTradeHistoryService), s.Symbol, startTime); err != nil {
-					log.WithError(err).Errorf("query trades error")
-				}
+			if err := s.MakerOrderExecutor.TradeCollector().Recover(ctx, s.makerSession.Exchange.(types.ExchangeTradeHistoryService), s.Symbol, startTime); err != nil {
+				log.WithError(err).Errorf("query trades error")
 			}
 		}
 	}

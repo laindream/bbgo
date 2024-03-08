@@ -78,6 +78,7 @@ func Test_toGlobalMarket(t *testing.T) {
 	}
 
 	exp := types.Market{
+		Exchange:        types.ExchangeBitget,
 		Symbol:          inst.Symbol,
 		LocalSymbol:     inst.Symbol,
 		PricePrecision:  2,
@@ -226,7 +227,7 @@ func Test_unfilledOrderToGlobalOrder(t *testing.T) {
 		}
 	)
 
-	t.Run("succeeds", func(t *testing.T) {
+	t.Run("succeeds with limit order", func(t *testing.T) {
 		order, err := unfilledOrderToGlobalOrder(unfilledOrder)
 		assert.NoError(err)
 		assert.Equal(&types.Order{
@@ -244,6 +245,67 @@ func Test_unfilledOrderToGlobalOrder(t *testing.T) {
 			UUID:             strconv.FormatInt(int64(orderId), 10),
 			Status:           types.OrderStatusNew,
 			ExecutedQuantity: fixedpoint.NewFromFloat(0),
+			IsWorking:        true,
+			CreationTime:     types.Time(types.NewMillisecondTimestampFromInt(1660704288118).Time()),
+			UpdateTime:       types.Time(types.NewMillisecondTimestampFromInt(1660704288118).Time()),
+		}, order)
+	})
+
+	t.Run("succeeds with market buy order", func(t *testing.T) {
+		unfilledOrder2 := unfilledOrder
+		unfilledOrder2.OrderType = v2.OrderTypeMarket
+		unfilledOrder2.Side = v2.SideTypeBuy
+		unfilledOrder2.Size = unfilledOrder2.PriceAvg.Mul(unfilledOrder2.Size)
+		unfilledOrder2.PriceAvg = fixedpoint.Zero
+		unfilledOrder2.Status = v2.OrderStatusNew
+
+		order, err := unfilledOrderToGlobalOrder(unfilledOrder2)
+		assert.NoError(err)
+		assert.Equal(&types.Order{
+			SubmitOrder: types.SubmitOrder{
+				ClientOrderID: "74b86af3-6098-479c-acac-bfb074c067f3",
+				Symbol:        "BTCUSDT",
+				Side:          types.SideTypeBuy,
+				Type:          types.OrderTypeMarket,
+				Quantity:      fixedpoint.Zero,
+				Price:         fixedpoint.Zero,
+				TimeInForce:   types.TimeInForceGTC,
+			},
+			Exchange:         types.ExchangeBitget,
+			OrderID:          uint64(orderId),
+			UUID:             strconv.FormatInt(int64(orderId), 10),
+			Status:           types.OrderStatusNew,
+			ExecutedQuantity: fixedpoint.Zero,
+			IsWorking:        true,
+			CreationTime:     types.Time(types.NewMillisecondTimestampFromInt(1660704288118).Time()),
+			UpdateTime:       types.Time(types.NewMillisecondTimestampFromInt(1660704288118).Time()),
+		}, order)
+	})
+
+	t.Run("succeeds with market sell order", func(t *testing.T) {
+		unfilledOrder2 := unfilledOrder
+		unfilledOrder2.OrderType = v2.OrderTypeMarket
+		unfilledOrder2.Side = v2.SideTypeSell
+		unfilledOrder2.PriceAvg = fixedpoint.Zero
+		unfilledOrder2.Status = v2.OrderStatusNew
+
+		order, err := unfilledOrderToGlobalOrder(unfilledOrder2)
+		assert.NoError(err)
+		assert.Equal(&types.Order{
+			SubmitOrder: types.SubmitOrder{
+				ClientOrderID: "74b86af3-6098-479c-acac-bfb074c067f3",
+				Symbol:        "BTCUSDT",
+				Side:          types.SideTypeSell,
+				Type:          types.OrderTypeMarket,
+				Quantity:      fixedpoint.NewFromInt(5),
+				Price:         fixedpoint.Zero,
+				TimeInForce:   types.TimeInForceGTC,
+			},
+			Exchange:         types.ExchangeBitget,
+			OrderID:          uint64(orderId),
+			UUID:             strconv.FormatInt(int64(orderId), 10),
+			Status:           types.OrderStatusNew,
+			ExecutedQuantity: fixedpoint.Zero,
 			IsWorking:        true,
 			CreationTime:     types.Time(types.NewMillisecondTimestampFromInt(1660704288118).Time()),
 			UpdateTime:       types.Time(types.NewMillisecondTimestampFromInt(1660704288118).Time()),
@@ -529,7 +591,7 @@ func Test_toGlobalTrade(t *testing.T) {
 	//   "orderType":"limit",
 	//   "side":"sell",
 	//   "priceAvg":"1.4001",
-	//   "size":"5",
+	//   "newSize":"5",
 	//   "amount":"7.0005",
 	//   "feeDetail":{
 	//      "deduction":"no",
@@ -720,7 +782,7 @@ func TestOrder_processMarketBuyQuantity(t *testing.T) {
 
 	t.Run("calculate qty", func(t *testing.T) {
 		o := Order{
-			Size: fixedpoint.NewFromFloat(2),
+			NewSize: fixedpoint.NewFromFloat(2),
 			Trade: Trade{
 				FillPrice: fixedpoint.NewFromFloat(1),
 			},
@@ -764,7 +826,7 @@ func TestOrder_toGlobalOrder(t *testing.T) {
 		InstId:           "BGBUSDT",
 		OrderId:          types.StrInt64(1107950489998626816),
 		ClientOrderId:    "cc73aab9-1e44-4022-8458-60d8c6a08753",
-		Size:             fixedpoint.NewFromFloat(39.0),
+		NewSize:          fixedpoint.NewFromFloat(39.0),
 		Notional:         fixedpoint.NewFromFloat(39.0),
 		OrderType:        v2.OrderTypeMarket,
 		Force:            v2.OrderForceGTC,
@@ -783,7 +845,7 @@ func TestOrder_toGlobalOrder(t *testing.T) {
 	//         "instId":"BGBUSDT",
 	//         "orderId":"1107950489998626816",
 	//         "clientOid":"cc73aab9-1e44-4022-8458-60d8c6a08753",
-	//         "size":"39.0000",
+	//         "newSize":"39.0000",
 	//         "notional":"39.000000",
 	//         "orderType":"market",
 	//         "force":"gtc",
@@ -818,7 +880,7 @@ func TestOrder_toGlobalOrder(t *testing.T) {
 				Symbol:        "BGBUSDT",
 				Side:          types.SideTypeBuy,
 				Type:          types.OrderTypeMarket,
-				Quantity:      newO.Size.Div(newO.FillPrice),
+				Quantity:      newO.NewSize.Div(newO.FillPrice),
 				Price:         newO.PriceAvg,
 				TimeInForce:   types.TimeInForceGTC,
 			},
@@ -838,7 +900,7 @@ func TestOrder_toGlobalOrder(t *testing.T) {
 	//         "instId":"BGBUSDT",
 	//         "orderId":"1107940456212631553",
 	//         "clientOid":"088bb971-858e-48e2-b503-85c3274edd89",
-	//         "size":"285.0000",
+	//         "newSize":"285.0000",
 	//         "orderType":"market",
 	//         "force":"gtc",
 	//         "side":"sell",
@@ -875,7 +937,7 @@ func TestOrder_toGlobalOrder(t *testing.T) {
 				Symbol:        "BGBUSDT",
 				Side:          types.SideTypeSell,
 				Type:          types.OrderTypeMarket,
-				Quantity:      newO.Size,
+				Quantity:      newO.NewSize,
 				Price:         newO.PriceAvg,
 				TimeInForce:   types.TimeInForceGTC,
 			},
@@ -896,7 +958,7 @@ func TestOrder_toGlobalOrder(t *testing.T) {
 	//         "orderId":"1107955329902481408",
 	//         "clientOid":"c578164a-bf34-44ba-8bb7-a1538f33b1b8",
 	//         "price":"0.49998",
-	//         "size":"24.9990",
+	//         "newSize":"24.9990",
 	//         "notional":"24.999000",
 	//         "orderType":"limit",
 	//         "force":"gtc",
@@ -934,7 +996,7 @@ func TestOrder_toGlobalOrder(t *testing.T) {
 				Symbol:        "BGBUSDT",
 				Side:          types.SideTypeBuy,
 				Type:          types.OrderTypeLimit,
-				Quantity:      newO.Size,
+				Quantity:      newO.NewSize,
 				Price:         newO.Price,
 				TimeInForce:   types.TimeInForceGTC,
 			},
@@ -955,7 +1017,7 @@ func TestOrder_toGlobalOrder(t *testing.T) {
 	//         "orderId":"1107936497259417600",
 	//         "clientOid":"02d4592e-091c-4b5a-aef3-6a7cf57b5e82",
 	//         "price":"0.48710",
-	//         "size":"280.0000",
+	//         "newSize":"280.0000",
 	//         "orderType":"limit",
 	//         "force":"gtc",
 	//         "side":"sell",
@@ -993,7 +1055,7 @@ func TestOrder_toGlobalOrder(t *testing.T) {
 				Symbol:        "BGBUSDT",
 				Side:          types.SideTypeSell,
 				Type:          types.OrderTypeLimit,
-				Quantity:      newO.Size,
+				Quantity:      newO.NewSize,
 				Price:         newO.Price,
 				TimeInForce:   types.TimeInForceGTC,
 			},
@@ -1043,7 +1105,7 @@ func TestOrder_toGlobalTrade(t *testing.T) {
 	//         "instId":"BGBUSDT",
 	//         "orderId":"1107950489998626816",
 	//         "clientOid":"cc73aab9-1e44-4022-8458-60d8c6a08753",
-	//         "size":"39.0000",
+	//         "newSize":"39.0000",
 	//         "notional":"39.000000",
 	//         "orderType":"market",
 	//         "force":"gtc",
@@ -1081,7 +1143,7 @@ func TestOrder_toGlobalTrade(t *testing.T) {
 		InstId:           "BGBUSDT",
 		OrderId:          types.StrInt64(1107950489998626816),
 		ClientOrderId:    "cc73aab9-1e44-4022-8458-60d8c6a08753",
-		Size:             fixedpoint.NewFromFloat(39.0),
+		NewSize:          fixedpoint.NewFromFloat(39.0),
 		Notional:         fixedpoint.NewFromFloat(39.0),
 		OrderType:        v2.OrderTypeMarket,
 		Force:            v2.OrderForceGTC,

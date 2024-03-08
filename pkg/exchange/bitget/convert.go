@@ -30,6 +30,7 @@ func toGlobalMarket(s v2.Symbol) types.Market {
 	}
 
 	return types.Market{
+		Exchange:        types.ExchangeBitget,
 		Symbol:          s.Symbol,
 		LocalSymbol:     s.Symbol,
 		PricePrecision:  s.PricePrecision.Int(),
@@ -188,10 +189,17 @@ func unfilledOrderToGlobalOrder(order v2.UnfilledOrder) (*types.Order, error) {
 	qty := order.Size
 	price := order.PriceAvg
 
-	// The market order will be executed immediately, so this check is used to handle corner cases.
+	// 2023/11/05 The market order will be executed immediately, so this check is used to handle corner cases.
+	// 2024/03/06 After placing a Market Order, we can retrieve it through the unfilledOrder API, so we still need to
+	// handle the Market Order status.
 	if orderType == types.OrderTypeMarket {
-		qty = order.BaseVolume
-		log.Warnf("!!! The price(%f) and quantity(%f) are not verified for market orders, because we only receive limit orders in the test environment !!!", price.Float64(), qty.Float64())
+		price = order.PriceAvg
+		if side == types.SideTypeBuy {
+			qty, err = processMarketBuyQuantity(order.BaseVolume, order.QuoteVolume, order.PriceAvg, order.Size, order.Status)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	return &types.Order{
@@ -391,7 +399,7 @@ func (o *Order) processMarketBuyQuantity() (fixedpoint.Value, error) {
 		if o.FillPrice.IsZero() {
 			return fixedpoint.Zero, fmt.Errorf("fillPrice for a partialFilled should not be zero")
 		}
-		return o.Size.Div(o.FillPrice), nil
+		return o.NewSize.Div(o.FillPrice), nil
 
 	case v2.OrderStatusFilled:
 		return o.AccBaseVolume, nil
@@ -422,7 +430,7 @@ func (o *Order) toGlobalOrder() (types.Order, error) {
 		return types.Order{}, err
 	}
 
-	qty := o.Size
+	qty := o.NewSize
 	if orderType == types.OrderTypeMarket && side == types.SideTypeBuy {
 		qty, err = o.processMarketBuyQuantity()
 		if err != nil {

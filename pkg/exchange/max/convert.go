@@ -172,7 +172,6 @@ func toGlobalOrder(maxOrder max.Order) (*types.Order, error) {
 	executedVolume := maxOrder.ExecutedVolume
 	remainingVolume := maxOrder.RemainingVolume
 	isMargin := maxOrder.WalletType == max.WalletTypeMargin
-
 	return &types.Order{
 		SubmitOrder: types.SubmitOrder{
 			ClientOrderID: maxOrder.ClientOID,
@@ -283,6 +282,7 @@ func toGlobalDepositStatus(a max.DepositState) types.DepositStatus {
 
 	// other states goes to this
 	// max.DepositStateSuspect, max.DepositStateSuspended
+	log.Warnf("unsupported deposit state %q from max exchange", a)
 	return types.DepositStatus(a)
 }
 

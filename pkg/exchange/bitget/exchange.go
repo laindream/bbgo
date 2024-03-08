@@ -329,7 +329,7 @@ func (e *Exchange) SubmitOrder(ctx context.Context, order types.SubmitOrder) (cr
 
 	// set client order id
 	if len(order.ClientOrderID) > maxOrderIdLen {
-		return nil, fmt.Errorf("unexpected length of order id, got: %d", len(order.ClientOrderID))
+		return nil, fmt.Errorf("unexpected length of client order id, got: %d", len(order.ClientOrderID))
 	}
 
 	if len(order.ClientOrderID) > 0 {
@@ -359,26 +359,28 @@ func (e *Exchange) SubmitOrder(ctx context.Context, order types.SubmitOrder) (cr
 		return nil, fmt.Errorf("failed to query open order by order id: %s, err: %w", orderId, err)
 	}
 
-	debugf("unfilled order response: %+v", ordersResp)
+	debugf("unfilled order response for order#%s: %+v", orderId, ordersResp)
 
 	if len(ordersResp) == 1 {
+		// 2023/11/05 The market order will be executed immediately, so we cannot retrieve it through the NewGetUnfilledOrdersRequest API.
+		// Try to get the order from the NewGetHistoryOrdersRequest API.
+		// 2024/03/06 After placing a Market Order, we can retrieve it through the unfilledOrder API, so we still need to
+		// handle the Market Order status.
 		return unfilledOrderToGlobalOrder(ordersResp[0])
 	} else if len(ordersResp) == 0 {
-		// The market order will be executed immediately, so we cannot retrieve it through the NewGetUnfilledOrdersRequest API.
-		// Try to get the order from the NewGetHistoryOrdersRequest API.
 		ordersResp, err := e.v2client.NewGetHistoryOrdersRequest().OrderId(orderId).Do(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to query history order by order id: %s, err: %w", orderId, err)
 		}
 
 		if len(ordersResp) != 1 {
-			return nil, fmt.Errorf("unexpected order length, order id: %s", orderId)
+			return nil, fmt.Errorf("unexpected length of history orders, expecting: 1, given: %d, ids: %s", len(ordersResp), orderId)
 		}
 
 		return toGlobalOrder(ordersResp[0])
 	}
 
-	return nil, fmt.Errorf("unexpected order length, order id: %s", orderId)
+	return nil, fmt.Errorf("unexpected length of unfilled orders, expecting: 1, given: %d, ids: %s", len(ordersResp), orderId)
 }
 
 func (e *Exchange) QueryOpenOrders(ctx context.Context, symbol string) (orders []types.Order, err error) {
@@ -513,12 +515,12 @@ func (e *Exchange) CancelOrders(ctx context.Context, orders ...types.Order) (err
 		req.Symbol(order.Symbol)
 
 		if err := cancelOrderRateLimiter.Wait(ctx); err != nil {
-			errs = multierr.Append(errs, fmt.Errorf("cancel order rate limiter wait, order id: %s, error: %w", order.ClientOrderID, err))
+			errs = multierr.Append(errs, fmt.Errorf("cancel order rate limiter wait, orderId: %d, clientOrderId: %s, error: %w", order.OrderID, order.ClientOrderID, err))
 			continue
 		}
 		res, err := req.Do(ctx)
 		if err != nil {
-			errs = multierr.Append(errs, fmt.Errorf("failed to cancel order id: %s, err: %w", order.ClientOrderID, err))
+			errs = multierr.Append(errs, fmt.Errorf("failed to cancel orderId: %d, clientOrderId: %s, err: %w", order.OrderID, order.ClientOrderID, err))
 			continue
 		}
 

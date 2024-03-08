@@ -11,6 +11,8 @@ import (
 	"github.com/c9s/bbgo/pkg/types"
 )
 
+var ErrOrderIsNil = errors.New("order object is nil")
+
 type advancedOrderCancelService interface {
 	CancelAllOrders(ctx context.Context) ([]types.Order, error)
 	CancelOrdersBySymbol(ctx context.Context, symbol string) ([]types.Order, error)
@@ -54,15 +56,21 @@ func QueryOrderUntilFilled(
 			OrderID: strconv.FormatUint(orderId, 10),
 		})
 
-		if err2 != nil || o == nil {
+		if err2 != nil {
 			return err2
 		}
 
-		if o.Status != types.OrderStatusFilled {
-			return errors.New("order is not filled yet")
+		if o == nil {
+			return ErrOrderIsNil
 		}
 
-		return err2
+		// for final status return nil error to stop the retry
+		switch o.Status {
+		case types.OrderStatusFilled, types.OrderStatusCanceled:
+			return nil
+		}
+
+		return fmt.Errorf("order is not filled yet: status=%s E/Q=%s/%s", o.Status, o.ExecutedQuantity.String(), o.Quantity.String())
 	}
 
 	err = GeneralBackoff(ctx, op)
