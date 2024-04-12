@@ -18,8 +18,9 @@ jobs:
         redis-version:
         - "6.2"
         go-version:
-        - "1.20"
+        - "1.21"
     env:
+      GITHUB_CI: true
       MYSQL_DATABASE: bbgo
       MYSQL_USER: "root"
       MYSQL_PASSWORD: "root" # pragma: allowlist secret
@@ -57,7 +58,7 @@ jobs:
         go-version: ${{ matrix.go-version }}
 
     - name: Install Migration Tool
-      run: go install github.com/c9s/rockhopper/cmd/rockhopper@v1.2.1
+      run: go install github.com/c9s/rockhopper/v2/cmd/rockhopper@latest
 
     - name: Test Migration SQL Files For MySQL
       run: |

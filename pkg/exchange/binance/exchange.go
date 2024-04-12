@@ -3,7 +3,6 @@ package binance
 import (
 	"context"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -67,12 +66,7 @@ func init() {
 }
 
 func isBinanceUs() bool {
-	v, err := strconv.ParseBool(os.Getenv("BINANCE_US"))
-	return err == nil && v
-}
-
-func paperTrade() bool {
-	v, ok := util.GetEnvVarBool("PAPER_TRADE")
+	v, ok := util.GetEnvVarBool("BINANCE_US")
 	return ok && v
 }
 
@@ -97,6 +91,9 @@ type Exchange struct {
 var timeSetterOnce sync.Once
 
 func New(key, secret string) *Exchange {
+	if util.IsPaperTrade() {
+		binance.UseTestnet = true
+	}
 	var client = binance.NewClient(key, secret)
 	client.HTTPClient = binanceapi.DefaultHttpClient
 	client.Debug = viper.GetBool("debug-binance-client")
@@ -107,11 +104,6 @@ func New(key, secret string) *Exchange {
 
 	if isBinanceUs() {
 		client.BaseURL = BinanceUSBaseURL
-	}
-
-	if paperTrade() {
-		client.BaseURL = BinanceTestBaseURL
-		futuresClient.BaseURL = FutureTestBaseURL
 	}
 
 	client2 := binanceapi.NewClient(client.BaseURL)
@@ -129,24 +121,24 @@ func New(key, secret string) *Exchange {
 	if len(key) > 0 && len(secret) > 0 {
 		client2.Auth(key, secret)
 		futuresClient2.Auth(key, secret)
-
-		ctx := context.Background()
-		go timeSetterOnce.Do(func() {
-			ex.setServerTimeOffset(ctx)
-
-			ticker := time.NewTicker(time.Hour)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-
-				case <-ticker.C:
-					ex.setServerTimeOffset(ctx)
-				}
-			}
-		})
 	}
+
+	ctx := context.Background()
+	go timeSetterOnce.Do(func() {
+		ex.setServerTimeOffset(ctx)
+
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+
+			case <-ticker.C:
+				ex.setServerTimeOffset(ctx)
+			}
+		}
+	})
 
 	return ex
 }
@@ -328,7 +320,9 @@ func (e *Exchange) QueryMarginAssetMaxBorrowable(ctx context.Context, asset stri
 	return resp.Amount, nil
 }
 
-func (e *Exchange) borrowRepayAsset(ctx context.Context, asset string, amount fixedpoint.Value, marginType binanceapi.BorrowRepayType) error {
+func (e *Exchange) borrowRepayAsset(
+	ctx context.Context, asset string, amount fixedpoint.Value, marginType binanceapi.BorrowRepayType,
+) error {
 	req := e.client2.NewPlaceMarginOrderRequest()
 	req.Asset(asset)
 	req.Amount(amount)
@@ -1443,7 +1437,7 @@ func (e *Exchange) QueryFundingRateHistory(ctx context.Context, symbol string) (
 	return &types.FundingRate{
 		FundingRate: fundingRate,
 		FundingTime: time.Unix(0, rate.FundingTime*int64(time.Millisecond)),
-		Time:        time.Unix(0, rate.Time*int64(time.Millisecond)),
+		Time:        time.Unix(0, rate.FundingTime*int64(time.Millisecond)),
 	}, nil
 }
 

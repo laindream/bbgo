@@ -46,16 +46,24 @@ func (s *Strategy) recover(ctx context.Context) error {
 	debugRoundOrders(s.logger, "current", currentRound)
 
 	// recover profit stats
-	if err := recoverProfitStats(ctx, s); err != nil {
-		return err
+	if s.DisableProfitStatsRecover {
+		s.logger.Info("disableProfitStatsRecover is set, skip profit stats recovery")
+	} else {
+		if err := recoverProfitStats(ctx, s); err != nil {
+			return err
+		}
+		s.logger.Info("recover profit stats DONE")
 	}
-	s.logger.Info("recover profit stats DONE")
 
 	// recover position
-	if err := recoverPosition(ctx, s.Position, queryService, currentRound); err != nil {
-		return err
+	if s.DisablePositionRecover {
+		s.logger.Info("disablePositionRecover is set, skip position recovery")
+	} else {
+		if err := recoverPosition(ctx, s.Position, queryService, currentRound); err != nil {
+			return err
+		}
+		s.logger.Info("recover position DONE")
 	}
-	s.logger.Info("recover position DONE")
 
 	// recover startTimeOfNextRound
 	startTimeOfNextRound := recoverStartTimeOfNextRound(ctx, currentRound, s.CoolDownInterval)
@@ -79,8 +87,9 @@ func recoverState(ctx context.Context, maxOrderCount int, currentRound Round, or
 
 	// dca stop at take-profit order stage
 	if currentRound.TakeProfitOrder.OrderID != 0 {
-		if len(currentRound.OpenPositionOrders) != maxOrderCount {
-			return None, fmt.Errorf("there is take-profit order but the number of open-position orders (%d) is not the same as maxOrderCount(%d). Please check it", len(currentRound.OpenPositionOrders), maxOrderCount)
+		// the number of open-positions orders may not be equal to maxOrderCount, because the notional may not enough to open maxOrderCount orders
+		if len(currentRound.OpenPositionOrders) > maxOrderCount {
+			return None, fmt.Errorf("there is take-profit order but the number of open-position orders (%d) is greater than maxOrderCount(%d). Please check it", len(currentRound.OpenPositionOrders), maxOrderCount)
 		}
 
 		takeProfitOrder := currentRound.TakeProfitOrder
@@ -126,40 +135,27 @@ func recoverState(ctx context.Context, maxOrderCount int, currentRound Round, or
 		}
 	}
 
-	// the number of open-position orders is the same as maxOrderCount -> place open-position orders successfully
-	if numOpenPositionOrders == maxOrderCount {
-		// all open-position orders are still not filled -> OpenPositionReady
-		if filledCnt == 0 && cancelledCnt == 0 {
-			return OpenPositionReady, nil
-		}
-
-		// there are at least one open-position orders filled -> OpenPositionOrderFilled
-		if filledCnt > 0 && cancelledCnt == 0 {
-			return OpenPositionOrderFilled, nil
-		}
-
-		// there are at last one open-position orders cancelled ->
-		if cancelledCnt > 0 {
-			return OpenPositionOrdersCancelling, nil
-		}
-
-		return None, fmt.Errorf("unexpected order status combination when numOpenPositionOrders(%d) == maxOrderCount(%d) (opened, filled, cancelled) = (%d, %d, %d)", numOpenPositionOrders, maxOrderCount, openedCnt, filledCnt, cancelledCnt)
-	}
-
-	// the number of open-position orders is less than maxOrderCount -> failed to place open-position orders
-	// 1. This strategy is at position opening, so it may not place all orders we want successfully
-	// 2. There are some errors when placing open-position orders. e.g. cannot lock fund.....
+	// all open-position orders are still not filled -> OpenPositionReady
 	if filledCnt == 0 && cancelledCnt == 0 {
-		// TODO: place the remaining open-position orders
 		return OpenPositionReady, nil
 	}
 
+	// there are at least one open-position orders filled
 	if filledCnt > 0 && cancelledCnt == 0 {
-		// TODO: place the remaing open-position orders and change state to OpenPositionOrderFilled
-		return OpenPositionOrderFilled, nil
+		if openedCnt > 0 {
+			return OpenPositionOrderFilled, nil
+		} else {
+			// all open-position orders filled, change to cancelling and place the take-profit order
+			return OpenPositionOrdersCancelling, nil
+		}
 	}
 
-	return None, fmt.Errorf("unexpected order status combination when numOpenPositionOrders(%d) < maxOrderCount(%d) (opened, filled, cancelled) = (%d, %d, %d)", numOpenPositionOrders, maxOrderCount, openedCnt, filledCnt, cancelledCnt)
+	// there are at last one open-position orders cancelled ->
+	if cancelledCnt > 0 {
+		return OpenPositionOrdersCancelling, nil
+	}
+
+	return None, fmt.Errorf("unexpected order status combination (opened, filled, cancelled) = (%d, %d, %d)", openedCnt, filledCnt, cancelledCnt)
 }
 
 func recoverPosition(ctx context.Context, position *types.Position, queryService RecoverApiQueryService, currentRound Round) error {
@@ -207,7 +203,8 @@ func recoverProfitStats(ctx context.Context, strategy *Strategy) error {
 		return fmt.Errorf("profit stats is nil, please check it")
 	}
 
-	return strategy.CalculateAndEmitProfit(ctx)
+	_, err := strategy.UpdateProfitStats(ctx)
+	return err
 }
 
 func recoverStartTimeOfNextRound(ctx context.Context, currentRound Round, coolDownInterval types.Duration) time.Time {

@@ -10,7 +10,7 @@ import (
 )
 
 func (s *Strategy) recoverPeriodically(ctx context.Context) {
-	s.logger.Info("[DCA] monitor and recover periodically")
+	s.logger.Info("monitor and recover periodically")
 	interval := util.MillisecondsJitter(10*time.Minute, 5*60*1000)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -28,13 +28,14 @@ func (s *Strategy) recoverPeriodically(ctx context.Context) {
 }
 
 func (s *Strategy) recoverActiveOrders(ctx context.Context) error {
+	s.logger.Info("recover active orders...")
 	openOrders, err := retry.QueryOpenOrdersUntilSuccessfulLite(ctx, s.ExchangeSession.Exchange, s.Symbol)
 	if err != nil {
 		s.logger.WithError(err).Warn("failed to query open orders")
 		return err
 	}
 
-	activeOrders := s.OrderExecutor.ActiveMakerOrders().Orders()
+	activeOrders := s.OrderExecutor.ActiveMakerOrders()
 
 	// update num of open orders metrics
 	if metricsNumOfOpenOrders != nil {
@@ -43,14 +44,19 @@ func (s *Strategy) recoverActiveOrders(ctx context.Context) error {
 
 	// update num of active orders metrics
 	if metricsNumOfActiveOrders != nil {
-		metricsNumOfActiveOrders.With(baseLabels).Set(float64(len(activeOrders)))
+		metricsNumOfActiveOrders.With(baseLabels).Set(float64(activeOrders.NumOfOrders()))
+	}
+
+	if len(openOrders) != activeOrders.NumOfOrders() {
+		s.logger.Warnf("num of open orders (%d) and active orders (%d) is different before active orders recovery, please check it.", len(openOrders), activeOrders.NumOfOrders())
 	}
 
 	opts := common.SyncActiveOrdersOpts{
-		Logger:          s.logger,
-		Exchange:        s.ExchangeSession.Exchange,
-		ActiveOrderBook: s.OrderExecutor.ActiveMakerOrders(),
-		OpenOrders:      openOrders,
+		Logger:            s.logger,
+		Exchange:          s.ExchangeSession.Exchange,
+		OrderQueryService: s.orderQueryService,
+		ActiveOrderBook:   activeOrders,
+		OpenOrders:        openOrders,
 	}
 
 	return common.SyncActiveOrders(ctx, opts)

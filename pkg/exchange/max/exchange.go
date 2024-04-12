@@ -55,12 +55,14 @@ func New(key, secret string) *Exchange {
 		v3client: &v3.Client{Client: client},
 		v3margin: &v3.MarginService{Client: client},
 
-		queryTradeLimiter:  rate.NewLimiter(rate.Every(1*time.Second), 2),
-		submitOrderLimiter: rate.NewLimiter(rate.Every(100*time.Millisecond), 10),
+		queryTradeLimiter: rate.NewLimiter(rate.Every(250*time.Millisecond), 2),
+
+		// 1200 cpm (1200 requests per minute = 20 requests per second)
+		submitOrderLimiter: rate.NewLimiter(rate.Every(50*time.Millisecond), 20),
 
 		// closedOrderQueryLimiter is used for the closed orders query rate limit, 1 request per second
 		closedOrderQueryLimiter: rate.NewLimiter(rate.Every(1*time.Second), 1),
-		accountQueryLimiter:     rate.NewLimiter(rate.Every(1*time.Second), 1),
+		accountQueryLimiter:     rate.NewLimiter(rate.Every(250*time.Millisecond), 1),
 		marketDataLimiter:       rate.NewLimiter(rate.Every(2*time.Second), 10),
 	}
 }
@@ -70,7 +72,10 @@ func (e *Exchange) Name() types.ExchangeName {
 }
 
 func (e *Exchange) QueryTicker(ctx context.Context, symbol string) (*types.Ticker, error) {
-	ticker, err := e.client.PublicService.Ticker(toLocalSymbol(symbol))
+	req := e.client.NewGetTickerRequest()
+	req.Market(toLocalSymbol(symbol))
+	ticker, err := req.Do(ctx)
+
 	if err != nil {
 		return nil, err
 	}

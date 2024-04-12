@@ -90,7 +90,9 @@ func (s *Strategy) Validate() error {
 	return nil
 }
 
-func (s *Strategy) aggregateBalances(ctx context.Context, sessions map[string]*bbgo.ExchangeSession) (totalBalances types.BalanceMap, sessionBalances map[string]types.BalanceMap) {
+func (s *Strategy) aggregateBalances(
+	ctx context.Context, sessions map[string]*bbgo.ExchangeSession,
+) (totalBalances types.BalanceMap, sessionBalances map[string]types.BalanceMap) {
 	totalBalances = make(types.BalanceMap)
 	sessionBalances = make(map[string]types.BalanceMap)
 
@@ -112,7 +114,9 @@ func (s *Strategy) aggregateBalances(ctx context.Context, sessions map[string]*b
 	return totalBalances, sessionBalances
 }
 
-func (s *Strategy) selectSessionForCurrency(ctx context.Context, sessions map[string]*bbgo.ExchangeSession, currency string, changeQuantity fixedpoint.Value) (*bbgo.ExchangeSession, *types.SubmitOrder) {
+func (s *Strategy) selectSessionForCurrency(
+	ctx context.Context, sessions map[string]*bbgo.ExchangeSession, currency string, changeQuantity fixedpoint.Value,
+) (*bbgo.ExchangeSession, *types.SubmitOrder) {
 	for _, sessionName := range s.PreferredSessions {
 		session := sessions[sessionName]
 
@@ -127,11 +131,31 @@ func (s *Strategy) selectSessionForCurrency(ctx context.Context, sessions map[st
 			side = types.SideTypeSell
 		}
 
-		for _, quoteCurrency := range quoteCurrencies {
+		for _, fromQuoteCurrency := range quoteCurrencies {
+			// skip the same currency, because there is no such USDT/USDT market
+			if currency == fromQuoteCurrency {
+				continue
+			}
+
+			// check both fromQuoteCurrency/currency and currency/fromQuoteCurrency
+			reversed := false
+			baseCurrency := currency
+			quoteCurrency := fromQuoteCurrency
 			symbol := currency + quoteCurrency
 			market, ok := session.Market(symbol)
 			if !ok {
-				continue
+				// for TWD in USDT/TWD market, buy TWD means sell USDT
+				baseCurrency = fromQuoteCurrency
+				quoteCurrency = currency
+				symbol = baseCurrency + currency
+				market, ok = session.Market(symbol)
+				if !ok {
+					continue
+				}
+
+				// reverse side
+				side = side.Reverse()
+				reversed = true
 			}
 
 			ticker, err := session.Exchange.QueryTicker(ctx, symbol)
@@ -147,9 +171,16 @@ func (s *Strategy) selectSessionForCurrency(ctx context.Context, sessions map[st
 			q := changeQuantity.Abs()
 
 			// a fast filtering
-			if q.Compare(market.MinQuantity) < 0 {
-				log.Debugf("skip dust quantity: %f", q.Float64())
-				continue
+			if reversed {
+				if q.Compare(market.MinNotional) < 0 {
+					log.Debugf("skip dust notional: %f", q.Float64())
+					continue
+				}
+			} else {
+				if q.Compare(market.MinQuantity) < 0 {
+					log.Debugf("skip dust quantity: %f", q.Float64())
+					continue
+				}
 			}
 
 			log.Infof("%s changeQuantity: %f ticker: %+v market: %+v", symbol, changeQuantity.Float64(), ticker, market)
@@ -171,17 +202,39 @@ func (s *Strategy) selectSessionForCurrency(ctx context.Context, sessions map[st
 					continue
 				}
 
-				requiredQuoteAmount := q.Mul(price)
+				requiredQuoteAmount := fixedpoint.Zero
+				if reversed {
+					requiredQuoteAmount = q
+				} else {
+					requiredQuoteAmount = q.Mul(price)
+				}
+
 				requiredQuoteAmount = requiredQuoteAmount.Round(market.PricePrecision, fixedpoint.Up)
 				if requiredQuoteAmount.Compare(quoteBalance.Available) > 0 {
 					log.Warnf("required quote amount %f > quote balance %v, skip", requiredQuoteAmount.Float64(), quoteBalance)
 					continue
 				}
 
+				// for currency = TWD in market USDT/TWD
+				// since the side is reversed, the quote currency is also "TWD" here.
+				//
+				// for currency = BTC in market BTC/USDT and the side is buy
+				// we want to check if the quote currency USDT used up another expected balance.
+				if quoteCurrency != currency {
+					if expectedQuoteBalance, ok := s.ExpectedBalances[quoteCurrency]; ok {
+						rest := quoteBalance.Total().Sub(requiredQuoteAmount)
+						if rest.Compare(expectedQuoteBalance) < 0 {
+							log.Warnf("required quote amount %f will use up the expected balance %f, skip", requiredQuoteAmount.Float64(), expectedQuoteBalance.Float64())
+							continue
+						}
+					}
+				}
+
 				maxAmount, ok := s.MaxAmounts[market.QuoteCurrency]
-				if ok {
-					requiredQuoteAmount = bbgo.AdjustQuantityByMaxAmount(requiredQuoteAmount, price, maxAmount)
-					log.Infof("adjusted quantity %f %s by max amount %f %s", requiredQuoteAmount.Float64(), market.BaseCurrency, maxAmount.Float64(), market.QuoteCurrency)
+				if ok && requiredQuoteAmount.Compare(maxAmount) > 0 {
+					log.Infof("adjusted required quote ammount %f %s by max amount %f %s", requiredQuoteAmount.Float64(), market.QuoteCurrency, maxAmount.Float64(), market.QuoteCurrency)
+
+					requiredQuoteAmount = maxAmount
 				}
 
 				if quantity, ok := market.GreaterThanMinimalOrderQuantity(side, price, requiredQuoteAmount); ok {
@@ -194,6 +247,8 @@ func (s *Strategy) selectSessionForCurrency(ctx context.Context, sessions map[st
 						Market:      market,
 						TimeInForce: types.TimeInForceGTC,
 					}
+				} else {
+					log.Warnf("The amount %f is not greater than the minimal order quantity for %s", requiredQuoteAmount.Float64(), market.Symbol)
 				}
 
 			case types.SideTypeSell:
@@ -206,7 +261,11 @@ func (s *Strategy) selectSessionForCurrency(ctx context.Context, sessions map[st
 					price = ticker.Sell
 				}
 
-				baseBalance, ok := session.Account.Balance(currency)
+				if reversed {
+					q = q.Div(price)
+				}
+
+				baseBalance, ok := session.Account.Balance(baseCurrency)
 				if !ok {
 					continue
 				}
@@ -232,6 +291,8 @@ func (s *Strategy) selectSessionForCurrency(ctx context.Context, sessions map[st
 						Market:      market,
 						TimeInForce: types.TimeInForceGTC,
 					}
+				} else {
+					log.Warnf("The amount %f is not greater than the minimal order quantity for %s", q.Float64(), market.Symbol)
 				}
 			}
 
@@ -376,7 +437,9 @@ func (s *Strategy) align(ctx context.Context, sessions map[string]*bbgo.Exchange
 	}
 }
 
-func (s *Strategy) calculateRefillQuantity(totalBalances types.BalanceMap, currency string, expectedBalance fixedpoint.Value) fixedpoint.Value {
+func (s *Strategy) calculateRefillQuantity(
+	totalBalances types.BalanceMap, currency string, expectedBalance fixedpoint.Value,
+) fixedpoint.Value {
 	if b, ok := totalBalances[currency]; ok {
 		netBalance := b.Net()
 		return expectedBalance.Sub(netBalance)

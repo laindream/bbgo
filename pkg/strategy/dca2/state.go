@@ -73,9 +73,6 @@ func (s *Strategy) runState(ctx context.Context) {
 	stateTriggerTicker := time.NewTicker(5 * time.Second)
 	defer stateTriggerTicker.Stop()
 
-	monitorTicker := time.NewTicker(10 * time.Minute)
-	defer monitorTicker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -84,10 +81,11 @@ func (s *Strategy) runState(ctx context.Context) {
 		case <-stateTriggerTicker.C:
 			// s.logger.Infof("[DCA] triggerNextState current state: %d", s.state)
 			s.triggerNextState()
-		case <-monitorTicker.C:
-			s.updateNumOfOrdersMetrics(ctx)
 		case nextState := <-s.nextStateC:
-			s.logger.Infof("[DCA] currenct state: %d, next state: %d", s.state, nextState)
+			// next state == current state -> skip
+			if nextState == s.state {
+				continue
+			}
 
 			// check the next state is valid
 			validNextState, exist := stateTransition[s.state]
@@ -138,8 +136,13 @@ func (s *Strategy) triggerNextState() {
 }
 
 func (s *Strategy) runWaitToOpenPositionState(ctx context.Context, next State) {
-	s.logger.Info("[State] WaitToOpenPosition - check startTimeOfNextRound")
+	if s.nextRoundPaused {
+		s.logger.Info("[State] WaitToOpenPosition - nextRoundPaused is set")
+		return
+	}
+
 	if time.Now().Before(s.startTimeOfNextRound) {
+		s.logger.Infof("[State] WaitToOpenPosition - before the startTimeOfNextRound %s", s.startTimeOfNextRound.String())
 		return
 	}
 
@@ -151,8 +154,13 @@ func (s *Strategy) runPositionOpening(ctx context.Context, next State) {
 	s.logger.Info("[State] PositionOpening - start placing open-position orders")
 	if err := s.placeOpenPositionOrders(ctx); err != nil {
 		s.logger.WithError(err).Error("failed to place dca orders, please check it.")
+
+		// try after 1 minute when failed to placing orders
+		s.startTimeOfNextRound = s.startTimeOfNextRound.Add(1 * time.Minute)
+		s.updateState(WaitToOpenPosition)
 		return
 	}
+
 	s.updateState(OpenPositionReady)
 	s.logger.Info("[State] PositionOpening -> OpenPositionReady")
 }
@@ -199,10 +207,8 @@ func (s *Strategy) runTakeProfitReady(ctx context.Context, next State) {
 
 	s.logger.Info("[State] TakeProfitReady - start reseting position and calculate quote investment for next round")
 
-	// reset position
-
-	// calculate profit stats
-	if err := s.CalculateAndEmitProfit(ctx); err != nil {
+	// update profit stats
+	if err := s.UpdateProfitStatsUntilSuccessful(ctx); err != nil {
 		s.logger.WithError(err).Warn("failed to calculate and emit profit")
 	}
 
