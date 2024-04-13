@@ -212,9 +212,9 @@ type StandardStreamEventHub interface {
 	OnBalanceSnapshot(cb func(balances BalanceMap))
 
 	OnBalanceUpdate(cb func(balances BalanceMap))
-
+	//---
 	OnKLineClosed(cb func(kline KLine))
-
+	//---
 	OnKLine(cb func(kline KLine))
 
 	OnBookUpdate(cb func(book SliceOrderBook))
