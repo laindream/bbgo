@@ -1334,6 +1334,19 @@ func (e *Exchange) DefaultFeeRates() types.ExchangeFee {
 	}
 }
 
+func (e *Exchange) GetFeeRates(ctx context.Context, symbol string) (types.ExchangeFee, error) {
+	resp, err := e.futuresClient.NewCommissionRateService().Symbol(symbol).Do(ctx)
+	if err != nil {
+		return types.ExchangeFee{}, err
+	}
+	maker, _ := strconv.ParseFloat(resp.MakerCommissionRate, 64)
+	taker, _ := strconv.ParseFloat(resp.TakerCommissionRate, 64)
+	return types.ExchangeFee{
+		MakerFeeRate: fixedpoint.NewFromFloat(maker),
+		TakerFeeRate: fixedpoint.NewFromFloat(taker),
+	}, nil
+}
+
 // QueryDepth query the order book depth of a symbol
 func (e *Exchange) QueryDepth(ctx context.Context, symbol string) (snapshot types.SliceOrderBook, finalUpdateID int64, err error) {
 	if e.IsFutures {
@@ -1366,11 +1379,17 @@ func convertDepth(symbol string, response *binanceapi.Depth) (snapshot types.Sli
 }
 
 func convertDepthLegacy(
-	snapshot types.SliceOrderBook, symbol string, finalUpdateID int64, response *binance.DepthResponse,
+	snapshot types.SliceOrderBook, symbol string, finalUpdateID int64, response *futures.DepthResponse,
 ) (types.SliceOrderBook, int64, error) {
 	snapshot.Symbol = symbol
 	// empty time since the API does not provide time information.
-	snapshot.Time = time.Time{}
+	sec := response.Time / 1000
+	nsec := (response.Time % 1000) * 1000000
+	snapshot.Time = time.Unix(sec, nsec)
+	sec = response.TradeTime / 1000
+	nsec = (response.TradeTime % 1000) * 1000000
+	snapshot.TransactionTime = time.Unix(sec, nsec)
+	snapshot.LastUpdateId = response.LastUpdateID
 	finalUpdateID = response.LastUpdateID
 	for _, entry := range response.Bids {
 		// entry.Price, Quantity: entry.Quantity
@@ -1400,6 +1419,7 @@ func convertDepthLegacy(
 
 		snapshot.Asks = append(snapshot.Asks, types.PriceVolume{Price: price, Volume: quantity})
 	}
+	snapshot.SetUpdate()
 
 	return snapshot, finalUpdateID, nil
 }

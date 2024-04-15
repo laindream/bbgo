@@ -15,7 +15,7 @@ import (
 type SnapshotFetcher func() (snapshot types.SliceOrderBook, finalUpdateID int64, err error)
 
 type Update struct {
-	FirstUpdateID, FinalUpdateID int64
+	FirstUpdateID, FinalUpdateID, PreviousFinalUpdateID int64
 
 	// Object is the update object
 	Object types.SliceOrderBook
@@ -42,6 +42,20 @@ type Buffer struct {
 
 	// bufferingPeriod is used to buffer the update message before we get the full depth
 	bufferingPeriod atomic.Value
+
+	isFutures bool
+
+	isNeedReset bool
+
+	continuousNormalUpdateCount int
+}
+
+func (b *Buffer) IsFutures() bool {
+	return b.isFutures
+}
+
+func (b *Buffer) SetIsFutures(isFutures bool) {
+	b.isFutures = isFutures
 }
 
 func NewBuffer(fetcher SnapshotFetcher) *Buffer {
@@ -85,11 +99,17 @@ func (b *Buffer) AddUpdate(o types.SliceOrderBook, firstUpdateID int64, finalArg
 	if len(finalArgs) > 0 {
 		finalUpdateID = finalArgs[0]
 	}
+	var previousFinalUpdateID int64
+	if len(finalArgs) > 1 {
+		// previous final update id exists means futures depth
+		previousFinalUpdateID = finalArgs[1]
+	}
 
 	u := Update{
-		FirstUpdateID: firstUpdateID,
-		FinalUpdateID: finalUpdateID,
-		Object:        o,
+		FirstUpdateID:         firstUpdateID,
+		FinalUpdateID:         finalUpdateID,
+		PreviousFinalUpdateID: previousFinalUpdateID,
+		Object:                o,
 	}
 
 	select {
@@ -113,10 +133,16 @@ func (b *Buffer) AddUpdate(o types.SliceOrderBook, firstUpdateID int64, finalArg
 	}
 
 	// if there is a missing update, we should reset the snapshot and re-fetch the snapshot
-	if u.FirstUpdateID > b.finalUpdateID+1 {
+	if (!b.isFutures && u.FirstUpdateID != b.finalUpdateID+1) ||
+		(b.isFutures && previousFinalUpdateID != b.finalUpdateID) {
 		// emitReset will reset the once outside the mutex lock section
 		b.buffer = []Update{u}
 		finalUpdateID = b.finalUpdateID
+		if previousFinalUpdateID != 0 {
+			finalUpdateID = previousFinalUpdateID
+		}
+		//b.continuousNormalUpdateCount = 0
+		//b.isNeedReset = true
 		b.resetSnapshot()
 		b.emitReset()
 		b.mu.Unlock()
@@ -128,13 +154,18 @@ func (b *Buffer) AddUpdate(o types.SliceOrderBook, firstUpdateID int64, finalArg
 
 	log.Debugf("depth update id %d -> %d", b.finalUpdateID, u.FinalUpdateID)
 	b.finalUpdateID = u.FinalUpdateID
+
+	b.continuousNormalUpdateCount++
+
 	b.mu.Unlock()
 
 	b.EmitPush(u)
+
 	return nil
 }
 
 func (b *Buffer) fetchAndPush() error {
+	time.Sleep(2 * time.Second)
 	book, finalUpdateID, err := b.fetcher()
 	if err != nil {
 		return err
@@ -154,23 +185,44 @@ func (b *Buffer) fetchAndPush() error {
 	}
 
 	var pushUpdates []Update
-	for _, u := range b.buffer {
-		// skip old events
-		if u.FirstUpdateID < finalUpdateID+1 {
-			continue
+	if b.isFutures {
+		for _, u := range b.buffer {
+			// skip old events
+			if u.FinalUpdateID < finalUpdateID {
+				continue
+			}
+
+			if u.PreviousFinalUpdateID > finalUpdateID {
+				b.resetSnapshot()
+				b.emitReset()
+				b.mu.Unlock()
+				return fmt.Errorf("there is a missing depth update, the previous update id %d > final update id %d", u.PreviousFinalUpdateID, finalUpdateID)
+			}
+
+			pushUpdates = append(pushUpdates, u)
+
+			// update the final update id to the correct final update id
+			finalUpdateID = u.FinalUpdateID
 		}
+	} else {
+		for _, u := range b.buffer {
+			// skip old events
+			if u.FirstUpdateID < finalUpdateID+1 {
+				continue
+			}
 
-		if u.FirstUpdateID > finalUpdateID+1 {
-			b.resetSnapshot()
-			b.emitReset()
-			b.mu.Unlock()
-			return fmt.Errorf("there is a missing depth update, the update id %d > final update id %d + 1", u.FirstUpdateID, finalUpdateID)
+			if u.FirstUpdateID > finalUpdateID+1 {
+				b.resetSnapshot()
+				b.emitReset()
+				b.mu.Unlock()
+				return fmt.Errorf("there is a missing depth update, the update id %d > final update id %d + 1", u.FirstUpdateID, finalUpdateID)
+			}
+
+			pushUpdates = append(pushUpdates, u)
+
+			// update the final update id to the correct final update id
+			finalUpdateID = u.FinalUpdateID
 		}
-
-		pushUpdates = append(pushUpdates, u)
-
-		// update the final update id to the correct final update id
-		finalUpdateID = u.FinalUpdateID
 	}
 
 	// clean the buffer since we have filtered out the buffer we want

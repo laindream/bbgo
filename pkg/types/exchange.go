@@ -120,6 +120,7 @@ type ExchangeTradeService interface {
 
 type ExchangeDefaultFeeRates interface {
 	DefaultFeeRates() ExchangeFee
+	GetFeeRates(ctx context.Context, symbol string) (ExchangeFee, error)
 }
 
 type ExchangeAmountFeeProtect interface {

@@ -26,6 +26,14 @@ type SliceOrderBook struct {
 	// this is for binance right now.
 	LastUpdateId int64
 
+	// exists in binance futures
+	TransactionTime time.Time
+
+	// used for order update
+	FirstUpdateID         int64
+	FinalUpdateID         int64
+	PreviousFinalUpdateID int64
+
 	lastUpdateTime time.Time
 
 	loadCallbacks   []func(book *SliceOrderBook)
@@ -40,6 +48,10 @@ func NewSliceOrderBook(symbol string) *SliceOrderBook {
 
 func (b *SliceOrderBook) LastUpdateTime() time.Time {
 	return b.lastUpdateTime
+}
+
+func (b *SliceOrderBook) SetUpdate() {
+	b.lastUpdateTime = time.Now()
 }
 
 func (b *SliceOrderBook) Spread() (fixedpoint.Value, bool) {
@@ -141,7 +153,11 @@ func (b *SliceOrderBook) updateBids(pvs PriceVolumeSlice) {
 func (b *SliceOrderBook) update(book SliceOrderBook) {
 	b.updateBids(book.Bids)
 	b.updateAsks(book.Asks)
-	b.lastUpdateTime = defaultTime(book.Time, time.Now)
+	if !book.TransactionTime.IsZero() {
+		b.lastUpdateTime = defaultTime(book.TransactionTime, time.Now)
+	} else {
+		b.lastUpdateTime = defaultTime(book.Time, time.Now)
+	}
 }
 
 func (b *SliceOrderBook) Reset() {

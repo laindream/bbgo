@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/adshao/go-binance/v2/futures"
 	"time"
 
-	"github.com/adshao/go-binance/v2/futures"
 	"github.com/slack-go/slack"
 
 	"github.com/adshao/go-binance/v2"
@@ -480,6 +480,10 @@ type DepthEvent struct {
 
 	Bids types.PriceVolumeSlice `json:"b"`
 	Asks types.PriceVolumeSlice `json:"a"`
+
+	// Fields below only exist in the futures depth event
+	TransactionTime       types.MillisecondTimestamp `json:"T"`
+	PreviousFinalUpdateID int64                      `json:"pu"`
 }
 
 func (e *DepthEvent) String() (o string) {
@@ -500,6 +504,9 @@ func (e *DepthEvent) String() (o string) {
 	}
 
 	o += fmt.Sprintf(" %d ~ %d", e.FirstUpdateID, e.FinalUpdateID)
+	if e.PreviousFinalUpdateID > 0 {
+		o += fmt.Sprintf("(Futures Previous Final Update ID: %d)", e.PreviousFinalUpdateID)
+	}
 	return o
 }
 
@@ -510,6 +517,7 @@ func (e *DepthEvent) OrderBook() (book types.SliceOrderBook, err error) {
 	// already in descending order
 	book.Bids = e.Bids
 	book.Asks = e.Asks
+
 	return book, err
 }
 
@@ -545,11 +553,13 @@ func parseDepthEvent(val *fastjson.Value) (depth *DepthEvent, err error) {
 			Event: string(val.GetStringBytes("e")),
 			Time:  types.NewMillisecondTimestampFromInt(val.GetInt64("E")),
 		},
-		Symbol:        string(val.GetStringBytes("s")),
-		FirstUpdateID: val.GetInt64("U"),
-		FinalUpdateID: val.GetInt64("u"),
-		Bids:          make(types.PriceVolumeSlice, 0, 50),
-		Asks:          make(types.PriceVolumeSlice, 0, 50),
+		Symbol:                string(val.GetStringBytes("s")),
+		FirstUpdateID:         val.GetInt64("U"),
+		FinalUpdateID:         val.GetInt64("u"),
+		Bids:                  make(types.PriceVolumeSlice, 0, 50),
+		Asks:                  make(types.PriceVolumeSlice, 0, 50),
+		TransactionTime:       types.NewMillisecondTimestampFromInt(val.GetInt64("T")),
+		PreviousFinalUpdateID: val.GetInt64("pu"),
 	}
 
 	for _, ev := range val.GetArray("b") {
@@ -700,14 +710,15 @@ func (e *MarketTradeEvent) Trade() types.Trade {
 
 type AggTradeEvent struct {
 	EventBase
-	Symbol         string           `json:"s"`
-	Quantity       fixedpoint.Value `json:"q"`
-	Price          fixedpoint.Value `json:"p"`
-	FirstTradeId   int64            `json:"f"`
-	LastTradeId    int64            `json:"l"`
-	OrderTradeTime int64            `json:"T"`
-	IsMaker        bool             `json:"m"`
-	Dummy          bool             `json:"M"`
+	Symbol           string           `json:"s"`
+	Quantity         fixedpoint.Value `json:"q"`
+	Price            fixedpoint.Value `json:"p"`
+	FirstTradeId     int64            `json:"f"`
+	LastTradeId      int64            `json:"l"`
+	OrderTradeTime   int64            `json:"T"`
+	IsMaker          bool             `json:"m"`
+	Dummy            bool             `json:"M"`
+	AggregateTradeId int64            `json:"a"`
 }
 
 /*
@@ -1170,14 +1181,19 @@ type BookTickerEvent struct {
 	BuySize  fixedpoint.Value `json:"B"`
 	Sell     fixedpoint.Value `json:"a"`
 	SellSize fixedpoint.Value `json:"A"`
+
+	// Fields below only exist in the futures book ticker event
+	TransactionTime types.MillisecondTimestamp `json:"T"`
 }
 
 func (k *BookTickerEvent) BookTicker() types.BookTicker {
 	return types.BookTicker{
-		Symbol:   k.Symbol,
-		Buy:      k.Buy,
-		BuySize:  k.BuySize,
-		Sell:     k.Sell,
-		SellSize: k.SellSize,
+		Symbol:          k.Symbol,
+		Buy:             k.Buy,
+		BuySize:         k.BuySize,
+		Sell:            k.Sell,
+		SellSize:        k.SellSize,
+		Time:            k.Time.Time(),
+		TransactionTime: k.TransactionTime.Time(),
 	}
 }

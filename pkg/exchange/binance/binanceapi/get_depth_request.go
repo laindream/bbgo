@@ -17,7 +17,7 @@ type GetDepthRequest struct {
 	client requestgen.APIClient
 
 	symbol string `param:"symbol"`
-	limit  int    `param:"limit" defaultValue:"1000"`
+	limit  int    `param:"limit" defaultValue:"5000"`
 }
 
 func (c *RestClient) NewGetDepthRequest() *GetDepthRequest {

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/adshao/go-binance/v2"
 	"github.com/adshao/go-binance/v2/futures"
 	"github.com/google/uuid"
 	"go.uber.org/multierr"
@@ -373,18 +372,12 @@ func newFuturesClientOrderID(originalID string) (clientOrderID string) {
 }
 
 func (e *Exchange) queryFuturesDepth(ctx context.Context, symbol string) (snapshot types.SliceOrderBook, finalUpdateID int64, err error) {
-	res, err := e.futuresClient.NewDepthService().Symbol(symbol).Do(ctx)
+	res, err := e.futuresClient.NewDepthService().Symbol(symbol).Limit(1000).Do(ctx)
 	if err != nil {
 		return snapshot, finalUpdateID, err
 	}
 
-	response := &binance.DepthResponse{
-		LastUpdateID: res.LastUpdateID,
-		Bids:         res.Bids,
-		Asks:         res.Asks,
-	}
-
-	return convertDepthLegacy(snapshot, symbol, finalUpdateID, response)
+	return convertDepthLegacy(snapshot, symbol, finalUpdateID, res)
 }
 
 func (e *Exchange) GetFuturesClient() *binanceapi.FuturesRestClient {

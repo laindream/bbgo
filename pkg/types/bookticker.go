@@ -3,18 +3,22 @@ package types
 import (
 	"fmt"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
+	"time"
 )
 
 // BookTicker time exists in ftx, not in binance
 // last exists in ftx, not in binance
 type BookTicker struct {
-	//Time     time.Time
+	Time     time.Time
 	Symbol   string
 	Buy      fixedpoint.Value // `buy` from Max, `bidPrice` from binance
 	BuySize  fixedpoint.Value
 	Sell     fixedpoint.Value // `sell` from Max, `askPrice` from binance
 	SellSize fixedpoint.Value
 	//Last     fixedpoint.Value
+
+	// Fields below only exist in the futures book ticker event
+	TransactionTime time.Time
 }
 
 func (b BookTicker) String() string {

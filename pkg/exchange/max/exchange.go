@@ -1217,6 +1217,11 @@ func (e *Exchange) DefaultFeeRates() types.ExchangeFee {
 	}
 }
 
+func (e *Exchange) GetFeeRates(ctx context.Context, symbol string) (types.ExchangeFee, error) {
+	// TODO: implement the fee rate query
+	return e.DefaultFeeRates(), nil
+}
+
 var SupportedIntervals = map[types.Interval]int{
 	types.Interval1m:  1 * 60,
 	types.Interval5m:  5 * 60,
