@@ -44,10 +44,6 @@ type Buffer struct {
 	bufferingPeriod atomic.Value
 
 	isFutures bool
-
-	isNeedReset bool
-
-	continuousNormalUpdateCount int
 }
 
 func (b *Buffer) IsFutures() bool {
@@ -141,8 +137,6 @@ func (b *Buffer) AddUpdate(o types.SliceOrderBook, firstUpdateID int64, finalArg
 		if previousFinalUpdateID != 0 {
 			finalUpdateID = previousFinalUpdateID
 		}
-		//b.continuousNormalUpdateCount = 0
-		//b.isNeedReset = true
 		b.resetSnapshot()
 		b.emitReset()
 		b.mu.Unlock()
@@ -154,8 +148,6 @@ func (b *Buffer) AddUpdate(o types.SliceOrderBook, firstUpdateID int64, finalArg
 
 	log.Debugf("depth update id %d -> %d", b.finalUpdateID, u.FinalUpdateID)
 	b.finalUpdateID = u.FinalUpdateID
-
-	b.continuousNormalUpdateCount++
 
 	b.mu.Unlock()
 

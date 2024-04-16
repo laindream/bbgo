@@ -88,12 +88,12 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 			}
 			isTickKlinePrintMap[printKey] = true
 			tickers, window := s.TickKline[bookTicker.Symbol].Get(bookTicker.TransactionTime.Truncate(time.Second).Add(-time.Minute*5), bookTicker.TransactionTime.Truncate(time.Second))
-			p := fmt.Sprintf("[%s][%s][%s]5M|%s|ALL Count: %d|%d|%d, Window: %+v\n", "TickKline", bookTicker.Symbol,
+			log.Infof("[%s][%s][%s]5M|%s|ALL Count: %d|%d|%d, Window: %+v", "TickKline", bookTicker.Symbol,
 				bookTicker.TransactionTime.Format("2006-01-02 15:04:05.00000"),
 				bookTicker.Symbol,
 				len(tickers), s.TickKline[bookTicker.Symbol].TickCount, totalCount,
 				window)
-			_ = p
+
 		}
 		//s.printData(session, bookTicker)
 	})
@@ -109,29 +109,12 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 			}
 			isAggKlinePrintMap[printKey] = true
 			trades, window := s.AggKline[trade.Symbol].Get(time.Time(trade.Time).Truncate(time.Second).Add(-time.Minute*2), time.Time(trade.Time).Truncate(time.Second).Add(-time.Minute*1))
-			p1 := fmt.Sprintf("[%s][%s][%s]5M|%s|ALL Count: %d|%d|%d, Window: %+v\n", "AggKline", trade.Symbol,
+			log.Infof("[%s][%s][%s]5M|%s|ALL Count: %d|%d|%d, Window: %+v", "AggKline", trade.Symbol,
 				time.Time(trade.Time).Format("2006-01-02 15:04:05.00000"),
 				trade.Symbol,
 				len(trades), s.AggKline[trade.Symbol].TradeCount, totalCount,
 				window)
-			persistTrades, persistWindow, err := s.AggKline[trade.Symbol].GetPersist(time.Time(trade.Time).Truncate(time.Second).Add(-time.Minute*2), time.Time(trade.Time).Truncate(time.Second).Add(-time.Minute*1))
-			if err != nil {
-				fmt.Printf("[%s][%s][%s]GetPersist Error: %s\n", "AggKline", trade.Symbol,
-					time.Time(trade.Time).Format("2006-01-02 15:04:05.00000"), err)
-				return
-			}
-			p2 := fmt.Sprintf("[%s][%s][%s]5M|%s|ALL Count: %d|%d|%d, Window: %+v\n", "AggKline", trade.Symbol,
-				time.Time(trade.Time).Format("2006-01-02 15:04:05.00000"),
-				trade.Symbol,
-				len(persistTrades), s.AggKline[trade.Symbol].TradeCount, totalCount,
-				persistWindow)
-			if len(trades) != len(persistTrades) {
-				fmt.Printf("!!!trades:%d, persistTrades:%d\n", len(trades), len(persistTrades))
-				fmt.Printf("%s", p1)
-				fmt.Printf("%s", p2)
-			}
 		}
-		//s.printData(session, trade)
 	})
 	session.MarketDataStream.OnMarketTrade(func(trade types.Trade) {
 		//printData(trade)
@@ -141,7 +124,6 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 	})
 
 	session.MarketDataStream.OnBookUpdate(func(book types.SliceOrderBook) {
-		//s.printData(session, book)
 		s.printFilteredOrderBook(session, book)
 	})
 
@@ -149,63 +131,6 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 		//printData(session, book)
 	})
 	return nil
-}
-
-func (s *Strategy) SetFeeRates(ctx context.Context, session *bbgo.ExchangeSession) error {
-	s.FeeRates = make(map[string]types.ExchangeFee)
-	for _, symbol := range s.Symbols {
-		rates, err := session.Exchange.(types.ExchangeDefaultFeeRates).GetFeeRates(ctx, symbol)
-		if err != nil {
-			return err
-		}
-		s.FeeRates[symbol] = rates
-		fmt.Printf("[%s]FeeRate: %s\n", symbol, s.FeeRates[symbol])
-		time.Sleep(2 * time.Second)
-	}
-	return nil
-}
-
-func (s *Strategy) Init(ctx context.Context, session *bbgo.ExchangeSession) error {
-	if err := s.SetFeeRates(ctx, session); err != nil {
-		return err
-	}
-	s.InitSearchDepth()
-	s.InitLastTriggerTime()
-	if err := s.InitAggKline(session); err != nil {
-		return err
-	}
-	s.InitTickKline()
-	return nil
-}
-
-func (s *Strategy) InitTickKline() {
-	s.TickKline = make(map[string]*tick.Kline)
-	for _, symbol := range s.Symbols {
-		s.TickKline[symbol] = tick.NewKline(10)
-	}
-}
-
-func (s *Strategy) InitAggKline(session *bbgo.ExchangeSession) error {
-	s.AggKline = make(map[string]*aggtrade.Kline)
-	for _, symbol := range s.Symbols {
-		aggKline, err := aggtrade.NewKline(10, *s.InfluxDB, symbol, session.Exchange.Name())
-		if err != nil {
-			return err
-		}
-		s.AggKline[symbol] = aggKline
-	}
-	return nil
-}
-
-func (s *Strategy) InitSearchDepth() {
-	s.SearchDepth = make(map[string]int)
-	for _, symbol := range s.Symbols {
-		s.SearchDepth[symbol] = DefaultSearchDepth
-	}
-}
-
-func (s *Strategy) InitLastTriggerTime() {
-	s.LastTriggerTime = make(map[string]time.Time)
 }
 
 func (s *Strategy) GetSearchDepth(symbol string) int {
@@ -249,18 +174,18 @@ func (s *Strategy) printFilteredOrderBook(session *bbgo.ExchangeSession, o types
 		diff := time.Now().Sub(s.GetLastTriggerTime(o.Symbol))
 		if !s.GetLastTriggerTime(o.Symbol).IsZero() && diff < time.Duration(s.EventIntervalSeconds)*time.Second {
 			s.SetSearchDepth(o.Symbol, depth+1)
-			fmt.Printf("[%s][%s][%d][%s](%s) %s,diff:%s\n", "OrderBook", o.Symbol, depth, time.Now().Format("2006-01-02 15:04:05.00000"), timeDiff, "Increase Depth", diff)
+			log.Infof("[%s][%s][%d][%s](%s) %s,diff:%s", "OrderBook", o.Symbol, depth, time.Now().Format("2006-01-02 15:04:05.00000"), timeDiff, "Increase Depth", diff)
 		}
 		s.SetLastTriggerTime(o.Symbol, time.Now())
 
-		fmt.Sprintf("[%s][%s][%d][%s](%s)", "OrderBook", o.Symbol, depth, time.Now().Format("2006-01-02 15:04:05.00000"), timeDiff)
-		fmt.Printf("[IBD:%.2f:%s]", ibd, imbalanceOrder)
-		fmt.Printf("[IBP:%.2f]", ibp)
-		fmt.Printf("[A:%d|B:%d]", len(order.SideBook(types.SideTypeSell)), len(order.SideBook(types.SideTypeBuy)))
-		fmt.Printf("[BA:%s|BB:%s]", bestAsk, bestBid)
-		fmt.Printf("[-A:%s|-B:%s]", s.topVolumes(order.SideBook(types.SideTypeSell), 5, 5), s.topVolumes(order.SideBook(types.SideTypeBuy), 5, 5))
+		l1 := fmt.Sprintf("[%s][%s][%d][%s](%s)", "OrderBook", o.Symbol, depth, time.Now().Format("2006-01-02 15:04:05.00000"), timeDiff)
+		l2 := fmt.Sprintf("[IBD:%.2f:%s]", ibd, imbalanceOrder)
+		l3 := fmt.Sprintf("[IBP:%.2f]", ibp)
+		l4 := fmt.Sprintf("[A:%d|B:%d]", len(order.SideBook(types.SideTypeSell)), len(order.SideBook(types.SideTypeBuy)))
+		l5 := fmt.Sprintf("[BA:%s|BB:%s]", bestAsk, bestBid)
+		l6 := fmt.Sprintf("[-A:%s|-B:%s]", s.topVolumes(order.SideBook(types.SideTypeSell), 5, 5), s.topVolumes(order.SideBook(types.SideTypeBuy), 5, 5))
+		log.Infof("%s%s%s%s%s%s", l1, l2, l3, l4, l5, l6)
 	}
-	fmt.Printf("\n")
 }
 
 func (s *Strategy) printData(session *bbgo.ExchangeSession, o interface{}) {
@@ -273,34 +198,34 @@ func (s *Strategy) printData(session *bbgo.ExchangeSession, o interface{}) {
 		if !dataTime.IsZero() {
 			timeDiff = time.Now().Sub(dataTime)
 		}
-		fmt.Printf("[%s](%s) %s", time.Now().Format("2006-01-02 15:04:05.00000"), timeDiff, oJsonStr)
+		log.Infof("[%s](%s) %s", time.Now().Format("2006-01-02 15:04:05.00000"), timeDiff, oJsonStr)
 	case types.BookTicker:
 		dataTime = o.(types.BookTicker).TransactionTime
 		var timeDiff time.Duration
 		if !dataTime.IsZero() {
 			timeDiff = time.Now().Sub(dataTime)
 		}
-		fmt.Printf("[%s][%s](%s) %s", "BookTicker", time.Now().Format("2006-01-02 15:04:05.00000"), timeDiff, oJsonStr)
+		log.Infof("[%s][%s](%s) %s", "BookTicker", time.Now().Format("2006-01-02 15:04:05.00000"), timeDiff, oJsonStr)
 	case types.SliceOrderBook:
 		dataTime = o.(types.SliceOrderBook).TransactionTime
 		var timeDiff time.Duration
 		if !dataTime.IsZero() {
 			timeDiff = time.Now().Sub(dataTime)
 		}
-		fmt.Printf("[%s][%s](%s)", "OrderBook", time.Now().Format("2006-01-02 15:04:05.00000"), timeDiff)
+		log.Infof("[%s][%s](%s)", "OrderBook", time.Now().Format("2006-01-02 15:04:05.00000"), timeDiff)
 
-		fmt.Printf("[UA:%d|UB:%d]", len(o.(types.SliceOrderBook).Asks), len(o.(types.SliceOrderBook).Bids))
+		log.Infof("[UA:%d|UB:%d]", len(o.(types.SliceOrderBook).Asks), len(o.(types.SliceOrderBook).Bids))
 		order, ok := session.OrderBook(s.Symbols[0])
 		if ok {
 			bestAsk, _ := order.BestAsk()
 			bestBid, _ := order.BestBid()
 			ibd, _, _ := s.CalculateOrderImbalanceRatioWithDepth(10, order)
 			ibp, _, _ := s.CalculateOrderImbalanceRatioWithPricePercentage(0.5, order)
-			fmt.Printf("[IBD:%.2f]", ibd)
-			fmt.Printf("[IBP:%.2f]", ibp)
-			fmt.Printf("[A:%d|B:%d]", len(order.SideBook(types.SideTypeSell)), len(order.SideBook(types.SideTypeBuy)))
-			fmt.Printf("[BA:%s|BB:%s]", bestAsk, bestBid)
-			fmt.Printf("[-A:%s|-B:%s]", s.topVolumes(order.SideBook(types.SideTypeSell), 5, 5), s.topVolumes(order.SideBook(types.SideTypeBuy), 5, 5))
+			log.Infof("[IBD:%.2f]", ibd)
+			log.Infof("[IBP:%.2f]", ibp)
+			log.Infof("[A:%d|B:%d]", len(order.SideBook(types.SideTypeSell)), len(order.SideBook(types.SideTypeBuy)))
+			log.Infof("[BA:%s|BB:%s]", bestAsk, bestBid)
+			log.Infof("[-A:%s|-B:%s]", s.topVolumes(order.SideBook(types.SideTypeSell), 5, 5), s.topVolumes(order.SideBook(types.SideTypeBuy), 5, 5))
 		}
 	case types.Trade:
 		dataTime = time.Time(o.(types.Trade).Time)
@@ -308,7 +233,7 @@ func (s *Strategy) printData(session *bbgo.ExchangeSession, o interface{}) {
 		if !dataTime.IsZero() {
 			timeDiff = time.Now().Sub(dataTime)
 		}
-		fmt.Printf("[%s](%s) %s\n", time.Now().Format("2006-01-02 15:04:05.00000"), timeDiff, oJsonStr)
+		log.Infof("[%s](%s) %s", time.Now().Format("2006-01-02 15:04:05.00000"), timeDiff, oJsonStr)
 	case types.LiquidationInfo:
 		dataTime = time.Time(o.(types.LiquidationInfo).TradeTime)
 	}
@@ -331,9 +256,6 @@ func (s *Strategy) topVolumes(pvs types.PriceVolumeSlice, priceRangePercentage f
 	}
 	return result
 }
-
-//func (s *Strategy) GetMakerBreakEvenChangePercentage(leverage float64) float64 {
-//}
 
 type OrderImbalanceEvent struct {
 	AskAgg  types.PriceVolume
@@ -406,5 +328,4 @@ func (s *Strategy) CalculateOrderImbalanceRatioWithPricePercentage(priceRangePer
 			BidAgg:  types.PriceVolume{Price: bidEndPrice, Volume: bidVolume},
 			BestBid: types.PriceVolume{Price: bids[0].Price, Volume: bids[0].Volume},
 		}, nil
-
 }

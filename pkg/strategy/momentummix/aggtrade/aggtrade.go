@@ -5,6 +5,7 @@ import (
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/aggtrade/influxpersist"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/config"
 	"github.com/c9s/bbgo/pkg/types"
+	log "github.com/sirupsen/logrus"
 	"math"
 	"time"
 )
@@ -70,14 +71,15 @@ type Day struct {
 }
 
 type Kline struct {
-	Days         map[string]*Day
-	MaxDays      int
-	StartTime    time.Time
-	EndTime      time.Time
-	TradeCount   int
-	influxClient *influxpersist.Client
-	Symbol       string
-	Exchange     types.ExchangeName
+	Days            map[string]*Day
+	MaxDays         int
+	StartTime       time.Time
+	EndTime         time.Time
+	TradeCount      int
+	influxClient    *influxpersist.Client
+	Symbol          string
+	Exchange        types.ExchangeName
+	IsEnablePersist bool
 }
 
 func NewSecond(previous *Second) *Second {
@@ -226,8 +228,13 @@ func (d *Day) CloseWindow() {
 }
 
 func NewKline(maxDays int, influxConfig config.InfluxDB, symbol string, exchange types.ExchangeName) (*Kline, error) {
-	influxClient, err := influxpersist.NewClient(influxConfig.URL, influxConfig.Token, influxConfig.Org, influxpersist.Bucket,
-		symbol, exchange)
+	influxClient, err := influxpersist.NewClient(
+		influxConfig.URL,
+		influxConfig.Token,
+		influxConfig.Org,
+		influxpersist.Bucket,
+		symbol,
+		exchange)
 	if err != nil {
 		return nil, err
 	}
@@ -245,6 +252,10 @@ func (k *Kline) GetDay(date string) *Day {
 }
 
 func (k *Kline) GetPersist(from time.Time, to time.Time) ([]*types.Trade, *WindowBase, error) {
+	if !k.IsEnablePersist {
+		trades, window := k.Get(from, to)
+		return trades, window, nil
+	}
 	k.influxClient.Flush()
 	trades, err := k.influxClient.Get(from, to)
 	if err != nil {
@@ -322,7 +333,7 @@ func (k *Kline) AppendTrade(trade *types.Trade) {
 	date := (time.Time)(trade.Time).Format("2006-01-02")
 	day := k.Days[date]
 	if day == nil {
-		if len(k.Days) >= k.MaxDays {
+		if len(k.Days) > k.MaxDays {
 			k.RemoveOldestDay()
 		}
 		previousDate := time.Time(trade.Time).AddDate(0, 0, -1).Format("2006-01-02")
@@ -334,7 +345,9 @@ func (k *Kline) AppendTrade(trade *types.Trade) {
 	}
 	day.AppendTrade(trade)
 	k.Update(trade)
-	k.influxClient.AppendTrade(trade)
+	if k.IsEnablePersist {
+		k.influxClient.AppendTrade(trade)
+	}
 }
 
 func (k *Kline) Update(trade *types.Trade) {
@@ -358,6 +371,7 @@ func (k *Kline) RemoveOldestDay() {
 	for date := range k.Days {
 		dayTime, err := time.Parse("2006-01-02", date)
 		if err != nil {
+			log.Errorf("failed to parse date: %s", date)
 			continue // skip if the date is not parseable
 		}
 
@@ -378,5 +392,8 @@ func (k *Kline) CloseKline() {
 	if k == nil {
 		return
 	}
-	k.influxClient.Close()
+	if k.IsEnablePersist {
+		k.influxClient.Flush()
+		k.influxClient.Close()
+	}
 }
