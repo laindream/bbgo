@@ -40,32 +40,32 @@ func (w *WindowBase) Update(trade *types.Trade) {
 	w.TradeCount++
 }
 
-func NewWindowBase() WindowBase {
-	return WindowBase{
+func NewWindowBase() *WindowBase {
+	return &WindowBase{
 		Low: fixedpoint.NewFromFloat(math.Inf(1)),
 	}
 }
 
 type Second struct {
-	WindowBase
+	*WindowBase
 	Trades   []*types.Trade
 	Previous *Second
 }
 
 type Minute struct {
-	WindowBase
+	*WindowBase
 	Seconds  []*Second
 	Previous *Minute
 }
 
 type Hour struct {
-	WindowBase
+	*WindowBase
 	Minutes  []*Minute
 	Previous *Hour
 }
 
 type Day struct {
-	WindowBase
+	*WindowBase
 	Hours    []*Hour
 	Previous *Day
 }
@@ -265,7 +265,7 @@ func (k *Kline) GetPersist(from time.Time, to time.Time) ([]*types.Trade, *Windo
 	for _, trade := range trades {
 		window.Update(trade)
 	}
-	return trades, &window, nil
+	return trades, window, nil
 }
 
 func (k *Kline) Get(from time.Time, to time.Time) ([]*types.Trade, *WindowBase) {
@@ -326,7 +326,7 @@ func (k *Kline) Get(from time.Time, to time.Time) ([]*types.Trade, *WindowBase) 
 			}
 		}
 	}
-	return trades, &window
+	return trades, window
 }
 
 func (k *Kline) AppendTrade(trade *types.Trade) {

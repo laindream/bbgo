@@ -2,6 +2,8 @@ package tick
 
 import (
 	"github.com/c9s/bbgo/pkg/fixedpoint"
+	"github.com/c9s/bbgo/pkg/strategy/momentummix/config"
+	"github.com/c9s/bbgo/pkg/strategy/momentummix/tick/influxpersist"
 	"github.com/c9s/bbgo/pkg/types"
 	"math"
 	"time"
@@ -33,42 +35,46 @@ func (w *WindowBase) Update(ticker *types.BookTicker) {
 	w.TickCount++
 }
 
-func NewWindowBase() WindowBase {
-	return WindowBase{
+func NewWindowBase() *WindowBase {
+	return &WindowBase{
 		Low: fixedpoint.NewFromFloat(math.Inf(1)),
 	}
 }
 
 type Second struct {
-	WindowBase
+	*WindowBase
 	Ticks    []*types.BookTicker
 	Previous *Second
 }
 
 type Minute struct {
-	WindowBase
+	*WindowBase
 	Seconds  []*Second
 	Previous *Minute
 }
 
 type Hour struct {
-	WindowBase
+	*WindowBase
 	Minutes  []*Minute
 	Previous *Hour
 }
 
 type Day struct {
-	WindowBase
+	*WindowBase
 	Hours    []*Hour
 	Previous *Day
 }
 
 type Kline struct {
-	Days      map[string]*Day
-	MaxDays   int
-	StartTime time.Time
-	EndTime   time.Time
-	TickCount int
+	Days            map[string]*Day
+	MaxDays         int
+	StartTime       time.Time
+	EndTime         time.Time
+	TickCount       int
+	influxClient    *influxpersist.Client
+	Symbol          string
+	Exchange        types.ExchangeName
+	IsEnablePersist bool
 }
 
 func NewSecond(previous *Second) *Second {
@@ -216,18 +222,48 @@ func (d *Day) CloseWindow() {
 	d.Hours[23].CloseWindow()
 }
 
-func NewKline(maxDays int) *Kline {
-	return &Kline{
-		Days:    make(map[string]*Day),
-		MaxDays: maxDays,
+func NewKline(maxDays int, influxConfig config.InfluxDB, symbol string, exchange types.ExchangeName) (*Kline, error) {
+	influxClient, err := influxpersist.NewClient(
+		influxConfig.URL,
+		influxConfig.Token,
+		influxConfig.Org,
+		influxpersist.Bucket,
+		symbol,
+		exchange)
+	if err != nil {
+		return nil, err
 	}
+	return &Kline{
+		Days:         make(map[string]*Day),
+		MaxDays:      maxDays,
+		influxClient: influxClient,
+		Symbol:       symbol,
+		Exchange:     exchange,
+	}, nil
 }
 
 func (k *Kline) GetDay(date string) *Day {
 	return k.Days[date]
 }
 
-func (k *Kline) Get(from time.Time, to time.Time) ([]*types.BookTicker, WindowBase) {
+func (k *Kline) GetPersist(from time.Time, to time.Time) ([]*types.BookTicker, *WindowBase, error) {
+	if !k.IsEnablePersist {
+		trades, window := k.Get(from, to)
+		return trades, window, nil
+	}
+	k.influxClient.Flush()
+	trades, err := k.influxClient.Get(from, to)
+	if err != nil {
+		return nil, nil, err
+	}
+	window := NewWindowBase()
+	for _, trade := range trades {
+		window.Update(trade)
+	}
+	return trades, window, nil
+}
+
+func (k *Kline) Get(from time.Time, to time.Time) ([]*types.BookTicker, *WindowBase) {
 	var tickers []*types.BookTicker
 	window := NewWindowBase()
 	for _, day := range k.Days {
@@ -292,7 +328,7 @@ func (k *Kline) AppendTick(ticker *types.BookTicker) {
 	date := ticker.TransactionTime.Format("2006-01-02")
 	day := k.Days[date]
 	if day == nil {
-		if len(k.Days) >= k.MaxDays {
+		if len(k.Days) > k.MaxDays {
 			k.RemoveOldestDay()
 		}
 		previousDate := ticker.TransactionTime.AddDate(0, 0, -1).Format("2006-01-02")
@@ -304,6 +340,9 @@ func (k *Kline) AppendTick(ticker *types.BookTicker) {
 	}
 	day.AppendTick(ticker)
 	k.Update(ticker)
+	if k.IsEnablePersist {
+		k.influxClient.AppendTick(ticker)
+	}
 }
 
 func (k *Kline) Update(ticker *types.BookTicker) {
@@ -340,5 +379,15 @@ func (k *Kline) RemoveOldestDay() {
 	if oldestDate != "" {
 		// Remove the oldest day from the map
 		delete(k.Days, oldestDate)
+	}
+}
+
+func (k *Kline) CloseKline() {
+	if k == nil {
+		return
+	}
+	if k.IsEnablePersist {
+		k.influxClient.Flush()
+		k.influxClient.Close()
 	}
 }

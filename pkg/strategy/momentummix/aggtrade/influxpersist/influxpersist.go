@@ -7,6 +7,7 @@ import (
 	"github.com/c9s/bbgo/pkg/types"
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
 	"github.com/influxdata/influxdb-client-go/v2/api"
+	"github.com/pkg/errors"
 	"strconv"
 	"strings"
 	"time"
@@ -139,6 +140,7 @@ func (c *Client) AppendTrade(trade *types.Trade) {
 		AddField("quote_quantity", int64(trade.QuoteQuantity)).
 		AddField("is_maker", trade.IsMaker).
 		AddTag("trade_id", strconv.FormatUint(trade.ID, 10)).
+		AddTag("trade_time", strconv.FormatInt(time.Time(trade.Time).UnixNano(), 10)).
 		SetTime(time.Time(trade.Time))
 	c.writeAPI.WritePoint(p)
 }
@@ -160,6 +162,20 @@ func (c *Client) Get(from, to time.Time) ([]*types.Trade, error) {
 	var trades []*types.Trade
 	for result.Next() {
 		if result.Record().Measurement() == fmt.Sprintf("%s_%s", c.Symbol, c.Exchange) {
+			tradeTimeStr, ok := result.Record().ValueByKey("trade_time").(string)
+			if !ok {
+				return nil, fmt.Errorf("trade_time is not string")
+			}
+			if tradeTimeStr == "" {
+				return nil, fmt.Errorf("trade_time is empty")
+			}
+			tradeTimeInt, err := strconv.ParseInt(tradeTimeStr, 10, 64)
+			if err != nil {
+				return nil, errors.Wrap(err, "failed to parse trade_time")
+			}
+			seconds := tradeTimeInt / 1e9
+			nanos := tradeTimeInt % 1e9
+			tradeTime := time.Unix(seconds, nanos)
 			isMaker, ok := result.Record().ValueByKey("is_maker").(bool)
 			if !ok {
 				return nil, fmt.Errorf("is_maker is not bool")
@@ -180,11 +196,10 @@ func (c *Client) Get(from, to time.Time) ([]*types.Trade, error) {
 			if tradeIDStr == "" {
 				return nil, fmt.Errorf("trade_id is empty")
 			}
-			id, _ := strconv.ParseUint(tradeIDStr, 10, 64)
-			//id, ok := result.Record().ValueByKey("id").(uint64)
-			//if !ok {
-			//	return nil, fmt.Errorf("id is not uint64")
-			//}
+			id, err := strconv.ParseUint(tradeIDStr, 10, 64)
+			if err != nil {
+				return nil, errors.Wrap(err, "failed to parse trade id")
+			}
 			price, ok := result.Record().ValueByKey("price").(int64)
 			if !ok {
 				return nil, fmt.Errorf("price is not int64")
@@ -204,7 +219,7 @@ func (c *Client) Get(from, to time.Time) ([]*types.Trade, error) {
 				Price:         fixedpoint.Value(price),
 				Quantity:      fixedpoint.Value(quantity),
 				QuoteQuantity: fixedpoint.Value(quoteQuantity),
-				Time:          types.Time(result.Record().Time()),
+				Time:          types.Time(tradeTime),
 				IsMaker:       isMaker,
 				Side:          side,
 				IsBuyer:       isBuyer,
