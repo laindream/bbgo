@@ -71,6 +71,11 @@ type Exchange struct {
 	timeNowFunc func() time.Time
 }
 
+func (e *Exchange) GetAccountStatus(ctx context.Context) (string, error) {
+	//TODO implement me
+	return "", nil
+}
+
 func New(key, secret, passphrase string) *Exchange {
 	client := okexapi.NewClient()
 

@@ -55,6 +55,11 @@ type Exchange struct {
 	v3client    *v3.Client
 }
 
+func (e *Exchange) GetAccountStatus(ctx context.Context) (string, error) {
+	//TODO implement me
+	return "", nil
+}
+
 func New(key, secret string) (*Exchange, error) {
 	client, err := bybitapi.NewClient()
 	if err != nil {

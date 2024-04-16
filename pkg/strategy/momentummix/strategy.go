@@ -95,8 +95,12 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 				bookTicker.Symbol,
 				len(tickers), s.TickKline[bookTicker.Symbol].TickCount, totalCount,
 				window)
-			s.TickKline[bookTicker.Symbol].GetPersist(bookTicker.TransactionTime.Truncate(time.Second).
+			persist, w, err := s.TickKline[bookTicker.Symbol].GetPersist(bookTicker.TransactionTime.Truncate(time.Second).
 				Add(-time.Minute*5), bookTicker.TransactionTime.Truncate(time.Second))
+			if err != nil {
+				log.Errorf("failed to get persist ticks: %v", err)
+			}
+			log.Infof("Persist Ticks: %d, Window: %+v", len(persist), w)
 		}
 		//s.printData(session, bookTicker)
 	})
@@ -117,8 +121,12 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 				trade.Symbol,
 				len(trades), s.AggKline[trade.Symbol].TradeCount, totalCount,
 				window)
-			s.AggKline[trade.Symbol].GetPersist(time.Time(trade.Time).Truncate(time.Second).
+			persist, w, err := s.AggKline[trade.Symbol].GetPersist(time.Time(trade.Time).Truncate(time.Second).
 				Add(-time.Minute), time.Time(trade.Time).Truncate(time.Second))
+			if err != nil {
+				log.Errorf("failed to get persist trades: %v", err)
+			}
+			log.Infof("Persist Trades: %d, Window: %+v", len(persist), w)
 		}
 	})
 	session.MarketDataStream.OnMarketTrade(func(trade types.Trade) {

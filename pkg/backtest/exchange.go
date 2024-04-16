@@ -77,6 +77,11 @@ type Exchange struct {
 	Src *ExchangeDataSource
 }
 
+func (e *Exchange) GetAccountStatus(ctx context.Context) (string, error) {
+	//TODO implement me
+	return "", nil
+}
+
 func NewExchange(
 	sourceName types.ExchangeName, sourceExchange types.Exchange, srv *service.BacktestService, config *bbgo.Backtest,
 ) (*Exchange, error) {

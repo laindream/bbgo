@@ -108,6 +108,8 @@ type ExchangeAccountService interface {
 	QueryAccount(ctx context.Context) (*Account, error)
 
 	QueryAccountBalances(ctx context.Context) (BalanceMap, error)
+
+	GetAccountStatus(ctx context.Context) (string, error)
 }
 
 type ExchangeTradeService interface {

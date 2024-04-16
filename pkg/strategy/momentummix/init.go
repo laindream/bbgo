@@ -8,6 +8,7 @@ import (
 	"github.com/c9s/bbgo/pkg/types"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -17,6 +18,13 @@ var log = logrus.New()
 
 func (s *Strategy) Init(ctx context.Context, session *bbgo.ExchangeSession) error {
 	s.InitLogger()
+
+	accountStatus, err := s.GetAccountStatus(ctx, session)
+	if err != nil {
+		log.Warnf("Failed to get account status: %v", err)
+	}
+	log.Infof("Account Status: %s", accountStatus)
+
 	if err := s.InitFeeRates(ctx, session); err != nil {
 		return err
 	}
@@ -29,6 +37,14 @@ func (s *Strategy) Init(ctx context.Context, session *bbgo.ExchangeSession) erro
 		return err
 	}
 	return nil
+}
+
+func (s *Strategy) GetAccountStatus(ctx context.Context, session *bbgo.ExchangeSession) (string, error) {
+	accountStatus, err := session.Exchange.GetAccountStatus(ctx)
+	if err != nil {
+		return "", err
+	}
+	return accountStatus, nil
 }
 
 func (s *Strategy) InitLogger() {
@@ -47,7 +63,7 @@ func (s *Strategy) InitLogger() {
 			}
 		}
 	}
-	log.Out = file
+	log.Out = io.MultiWriter(os.Stdout, file)
 }
 
 func (s *Strategy) InitFeeRates(ctx context.Context, session *bbgo.ExchangeSession) error {
@@ -71,6 +87,7 @@ func (s *Strategy) InitTickKline(session *bbgo.ExchangeSession) error {
 		if err != nil {
 			return errors.Wrapf(err, "failed to create tick kline for symbol: %s,", symbol)
 		}
+		tickKline.IsEnablePersist = true
 		s.TickKline[symbol] = tickKline
 	}
 	return nil
@@ -83,6 +100,7 @@ func (s *Strategy) InitAggKline(session *bbgo.ExchangeSession) error {
 		if err != nil {
 			return errors.Wrapf(err, "failed to create aggtrade kline for symbol: %s,", symbol)
 		}
+		aggKline.IsEnablePersist = true
 		s.AggKline[symbol] = aggKline
 	}
 	return nil

@@ -1335,6 +1335,7 @@ func (e *Exchange) DefaultFeeRates() types.ExchangeFee {
 }
 
 func (e *Exchange) GetFeeRates(ctx context.Context, symbol string) (types.ExchangeFee, error) {
+	// TODO: should consider spot, margin, and futures
 	resp, err := e.futuresClient.NewCommissionRateService().Symbol(symbol).Do(ctx)
 	if err != nil {
 		return types.ExchangeFee{}, err
@@ -1345,6 +1346,14 @@ func (e *Exchange) GetFeeRates(ctx context.Context, symbol string) (types.Exchan
 		MakerFeeRate: fixedpoint.NewFromFloat(maker),
 		TakerFeeRate: fixedpoint.NewFromFloat(taker),
 	}, nil
+}
+
+func (e *Exchange) GetAccountStatus(ctx context.Context) (string, error) {
+	resp, err := e.client2.NewGetAccountStatusRequest().Do(ctx)
+	if err != nil {
+		return "", err
+	}
+	return resp.Data, nil
 }
 
 // QueryDepth query the order book depth of a symbol

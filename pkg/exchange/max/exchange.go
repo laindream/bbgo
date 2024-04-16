@@ -1222,6 +1222,11 @@ func (e *Exchange) GetFeeRates(ctx context.Context, symbol string) (types.Exchan
 	return e.DefaultFeeRates(), nil
 }
 
+func (e *Exchange) GetAccountStatus(ctx context.Context) (string, error) {
+	// TODO: implement the account status query
+	return "", nil
+}
+
 var SupportedIntervals = map[types.Interval]int{
 	types.Interval1m:  1 * 60,
 	types.Interval5m:  5 * 60,

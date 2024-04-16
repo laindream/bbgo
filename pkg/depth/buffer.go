@@ -156,11 +156,26 @@ func (b *Buffer) AddUpdate(o types.SliceOrderBook, firstUpdateID int64, finalArg
 	return nil
 }
 
+func (b *Buffer) getLastBuffLastUpdateID() int64 {
+	var lastUpdateID int64
+	b.mu.Lock()
+	if b.isFutures {
+		lastUpdateID = b.buffer[len(b.buffer)-1].PreviousFinalUpdateID
+	} else {
+		lastUpdateID = b.buffer[len(b.buffer)-1].FirstUpdateID - 1
+	}
+	b.mu.Unlock()
+	return lastUpdateID
+}
+
 func (b *Buffer) fetchAndPush() error {
-	time.Sleep(2 * time.Second)
 	book, finalUpdateID, err := b.fetcher()
 	if err != nil {
 		return err
+	}
+
+	for b.getLastBuffLastUpdateID() <= finalUpdateID {
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	b.mu.Lock()
@@ -168,11 +183,20 @@ func (b *Buffer) fetchAndPush() error {
 
 	if len(b.buffer) > 0 {
 		// the snapshot is too early
-		if finalUpdateID < b.buffer[0].FirstUpdateID {
-			b.resetSnapshot()
-			b.emitReset()
-			b.mu.Unlock()
-			return fmt.Errorf("depth snapshot is too early, final update %d is < the first update id %d", finalUpdateID, b.buffer[0].FirstUpdateID)
+		if b.isFutures {
+			if finalUpdateID < b.buffer[0].PreviousFinalUpdateID {
+				b.resetSnapshot()
+				b.emitReset()
+				b.mu.Unlock()
+				return fmt.Errorf("depth snapshot is too early, final update %d is < the first update id %d", finalUpdateID, b.buffer[0].FirstUpdateID)
+			}
+		} else {
+			if finalUpdateID < b.buffer[0].FirstUpdateID-1 {
+				b.resetSnapshot()
+				b.emitReset()
+				b.mu.Unlock()
+				return fmt.Errorf("depth snapshot is too early, final update %d is < the first update id %d", finalUpdateID, b.buffer[0].FirstUpdateID)
+			}
 		}
 	}
 
@@ -180,7 +204,7 @@ func (b *Buffer) fetchAndPush() error {
 	if b.isFutures {
 		for _, u := range b.buffer {
 			// skip old events
-			if u.FinalUpdateID < finalUpdateID {
+			if u.PreviousFinalUpdateID < finalUpdateID {
 				continue
 			}
 
