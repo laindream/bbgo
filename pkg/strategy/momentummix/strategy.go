@@ -72,6 +72,7 @@ func (s *Strategy) Subscribe(session *bbgo.ExchangeSession) {
 
 func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, session *bbgo.ExchangeSession) error {
 	if err := s.Init(ctx, session); err != nil {
+		log.Fatalf("failed to initialize the strategy: %v", err)
 		return err
 	}
 	session.MarketDataStream.OnKLine(func(kline types.KLine) {

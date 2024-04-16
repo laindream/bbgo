@@ -6,6 +6,7 @@ import (
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/aggtrade"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/tick"
 	"github.com/c9s/bbgo/pkg/types"
+	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"os"
 	"path/filepath"
@@ -24,7 +25,9 @@ func (s *Strategy) Init(ctx context.Context, session *bbgo.ExchangeSession) erro
 	if err := s.InitAggKline(session); err != nil {
 		return err
 	}
-	s.InitTickKline()
+	if err := s.InitTickKline(session); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -61,11 +64,16 @@ func (s *Strategy) InitFeeRates(ctx context.Context, session *bbgo.ExchangeSessi
 	return nil
 }
 
-func (s *Strategy) InitTickKline() {
+func (s *Strategy) InitTickKline(session *bbgo.ExchangeSession) error {
 	s.TickKline = make(map[string]*tick.Kline)
 	for _, symbol := range s.Symbols {
-		s.TickKline[symbol] = tick.NewKline(10)
+		tickKline, err := tick.NewKline(10, *s.InfluxDB, symbol, session.Exchange.Name())
+		if err != nil {
+			return errors.Wrapf(err, "failed to create tick kline for symbol: %s,", symbol)
+		}
+		s.TickKline[symbol] = tickKline
 	}
+	return nil
 }
 
 func (s *Strategy) InitAggKline(session *bbgo.ExchangeSession) error {
@@ -73,7 +81,7 @@ func (s *Strategy) InitAggKline(session *bbgo.ExchangeSession) error {
 	for _, symbol := range s.Symbols {
 		aggKline, err := aggtrade.NewKline(10, *s.InfluxDB, symbol, session.Exchange.Name())
 		if err != nil {
-			return err
+			return errors.Wrapf(err, "failed to create aggtrade kline for symbol: %s,", symbol)
 		}
 		s.AggKline[symbol] = aggKline
 	}
