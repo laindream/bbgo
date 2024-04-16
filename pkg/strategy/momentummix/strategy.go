@@ -82,19 +82,21 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 	session.MarketDataStream.OnBookTickerUpdate(func(bookTicker types.BookTicker) {
 		s.TickKline[bookTicker.Symbol].AppendTick(&bookTicker)
 		printKey := fmt.Sprintf("%s-%s", bookTicker.Symbol, bookTicker.TransactionTime.Format("2006-01-02 15:04"))
-		if bookTicker.TransactionTime.Minute()%5 == 0 && !isTickKlinePrintMap[printKey] {
+		if !isTickKlinePrintMap[printKey] {
 			var totalCount int
 			for _, kline := range s.TickKline {
 				totalCount += kline.TickCount
 			}
 			isTickKlinePrintMap[printKey] = true
-			tickers, window := s.TickKline[bookTicker.Symbol].Get(bookTicker.TransactionTime.Truncate(time.Second).Add(-time.Minute*5), bookTicker.TransactionTime.Truncate(time.Second))
+			tickers, window := s.TickKline[bookTicker.Symbol].Get(bookTicker.TransactionTime.Truncate(time.Second).
+				Add(-time.Minute*5), bookTicker.TransactionTime.Truncate(time.Second))
 			log.Infof("[%s][%s][%s]5M|%s|ALL Count: %d|%d|%d, Window: %+v", "TickKline", bookTicker.Symbol,
 				bookTicker.TransactionTime.Format("2006-01-02 15:04:05.00000"),
 				bookTicker.Symbol,
 				len(tickers), s.TickKline[bookTicker.Symbol].TickCount, totalCount,
 				window)
-
+			s.TickKline[bookTicker.Symbol].GetPersist(bookTicker.TransactionTime.Truncate(time.Second).
+				Add(-time.Minute*5), bookTicker.TransactionTime.Truncate(time.Second))
 		}
 		//s.printData(session, bookTicker)
 	})
@@ -102,19 +104,21 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 	session.MarketDataStream.OnAggTrade(func(trade types.Trade) {
 		s.AggKline[trade.Symbol].AppendTrade(&trade)
 		printKey := fmt.Sprintf("%s-%s", trade.Symbol, time.Time(trade.Time).Format("2006-01-02 15:04"))
-		//time.Time(trade.Time).Minute()%5 == 0 &&
 		if !isAggKlinePrintMap[printKey] {
 			var totalCount int
 			for _, kline := range s.AggKline {
 				totalCount += kline.TradeCount
 			}
 			isAggKlinePrintMap[printKey] = true
-			trades, window := s.AggKline[trade.Symbol].Get(time.Time(trade.Time).Truncate(time.Second).Add(-time.Minute*2), time.Time(trade.Time).Truncate(time.Second).Add(-time.Minute*1))
+			trades, window := s.AggKline[trade.Symbol].Get(time.Time(trade.Time).Truncate(time.Second).
+				Add(-time.Minute), time.Time(trade.Time).Truncate(time.Second))
 			log.Infof("[%s][%s][%s]5M|%s|ALL Count: %d|%d|%d, Window: %+v", "AggKline", trade.Symbol,
 				time.Time(trade.Time).Format("2006-01-02 15:04:05.00000"),
 				trade.Symbol,
 				len(trades), s.AggKline[trade.Symbol].TradeCount, totalCount,
 				window)
+			s.AggKline[trade.Symbol].GetPersist(time.Time(trade.Time).Truncate(time.Second).
+				Add(-time.Minute), time.Time(trade.Time).Truncate(time.Second))
 		}
 	})
 	session.MarketDataStream.OnMarketTrade(func(trade types.Trade) {

@@ -119,8 +119,9 @@ func (c *Client) AppendTradeBlocking(trade *types.Trade) {
 		AddField("price", int64(trade.Price)).
 		AddField("quantity", int64(trade.Quantity)).
 		AddField("quote_quantity", int64(trade.QuoteQuantity)).
-		AddTag("is_maker", fmt.Sprintf("%t", trade.IsMaker)).
+		AddField("is_maker", trade.IsMaker).
 		AddTag("trade_id", strconv.FormatUint(trade.ID, 10)).
+		AddTag("trade_time", strconv.FormatInt(time.Time(trade.Time).UnixNano(), 10)).
 		SetTime(time.Time(trade.Time))
 	err := c.writeAPIBlocking.WritePoint(context.Background(), p)
 	if err != nil {
