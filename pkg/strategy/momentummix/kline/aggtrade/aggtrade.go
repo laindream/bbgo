@@ -2,8 +2,8 @@ package aggtrade
 
 import (
 	"github.com/c9s/bbgo/pkg/fixedpoint"
-	"github.com/c9s/bbgo/pkg/strategy/momentummix/aggtrade/influxpersist"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/config"
+	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/aggtrade/influxpersist"
 	"github.com/c9s/bbgo/pkg/types"
 	log "github.com/sirupsen/logrus"
 	"math"
@@ -11,16 +11,60 @@ import (
 )
 
 type WindowBase struct {
-	StartTime     time.Time        `json:"startTime" db:"start_time"`
-	EndTime       time.Time        `json:"endTime" db:"end_time"`
-	Quantity      fixedpoint.Value `json:"quantity" db:"quantity"`
-	QuoteQuantity fixedpoint.Value `json:"quoteQuantity" db:"quote_quantity"`
-	Open          fixedpoint.Value `json:"open" db:"open"`
-	Close         fixedpoint.Value `json:"close" db:"close"`
-	High          fixedpoint.Value `json:"high" db:"high"`
-	Low           fixedpoint.Value `json:"low" db:"low"`
-	IsClosed      bool             `json:"isClosed" db:"is_closed"`
-	TradeCount    int              `json:"tradeCount" db:"trade_count"`
+	StartTime         time.Time        `json:"startTime" db:"start_time"`
+	EndTime           time.Time        `json:"endTime" db:"end_time"`
+	Quantity          fixedpoint.Value `json:"quantity" db:"quantity"`
+	QuoteQuantity     fixedpoint.Value `json:"quoteQuantity" db:"quote_quantity"`
+	SellQuantity      fixedpoint.Value `json:"sellQuantity" db:"sell_quantity"`
+	SellQuoteQuantity fixedpoint.Value `json:"sellQuoteQuantity" db:"sell_quote_quantity"`
+	BuyQuantity       fixedpoint.Value `json:"buyQuantity" db:"buy_quantity"`
+	BuyQuoteQuantity  fixedpoint.Value `json:"buyQuoteQuantity" db:"buy_quote_quantity"`
+	Open              fixedpoint.Value `json:"open" db:"open"`
+	Close             fixedpoint.Value `json:"close" db:"close"`
+	High              fixedpoint.Value `json:"high" db:"high"`
+	Low               fixedpoint.Value `json:"low" db:"low"`
+	IsClosed          bool             `json:"isClosed" db:"is_closed"`
+	TradeCount        int              `json:"tradeCount" db:"trade_count"`
+}
+
+func (w *WindowBase) GetFluctuation() float64 {
+	if w.TradeCount == 0 {
+		return 0
+	}
+	if w.Open.IsZero() {
+		return 0
+	}
+	return w.Close.Sub(w.Open).Div(w.Open).Float64()
+}
+
+func (w *WindowBase) GetAmplitude() float64 {
+	if w.TradeCount == 0 {
+		return 0
+	}
+	if w.Open.IsZero() {
+		return 0
+	}
+	return w.High.Sub(w.Low).Div(w.Open).Float64()
+}
+
+func (w *WindowBase) GetLowerAmplitude() float64 {
+	if w.TradeCount == 0 {
+		return 0
+	}
+	if w.Open.IsZero() {
+		return 0
+	}
+	return w.Open.Sub(w.Low).Div(w.Open).Float64()
+}
+
+func (w *WindowBase) GetUpperAmplitude() float64 {
+	if w.TradeCount == 0 {
+		return 0
+	}
+	if w.Open.IsZero() {
+		return 0
+	}
+	return w.High.Sub(w.Open).Div(w.Open).Float64()
 }
 
 func (w *WindowBase) Update(trade *types.Trade) {
@@ -37,7 +81,68 @@ func (w *WindowBase) Update(trade *types.Trade) {
 	w.Low = fixedpoint.Min(w.Low, trade.Price)
 	w.Quantity += trade.Quantity
 	w.QuoteQuantity += trade.QuoteQuantity
+	if trade.IsMaker {
+		w.SellQuantity += trade.Quantity
+		w.SellQuoteQuantity += trade.QuoteQuantity
+	} else {
+		w.BuyQuantity += trade.Quantity
+		w.BuyQuoteQuantity += trade.QuoteQuantity
+	}
 	w.TradeCount++
+}
+
+func (w *WindowBase) AppendAfter(afterWindow *WindowBase) *WindowBase {
+	if w.IsEmpty() {
+		return afterWindow
+	}
+	if afterWindow.IsEmpty() {
+		return w
+	}
+	appendedWindow := NewWindowBase()
+	appendedWindow.StartTime = w.StartTime
+	appendedWindow.EndTime = afterWindow.EndTime
+	appendedWindow.Quantity = w.Quantity + afterWindow.Quantity
+	appendedWindow.QuoteQuantity = w.QuoteQuantity + afterWindow.QuoteQuantity
+	appendedWindow.SellQuantity = w.SellQuantity + afterWindow.SellQuantity
+	appendedWindow.SellQuoteQuantity = w.SellQuoteQuantity + afterWindow.SellQuoteQuantity
+	appendedWindow.BuyQuantity = w.BuyQuantity + afterWindow.BuyQuantity
+	appendedWindow.BuyQuoteQuantity = w.BuyQuoteQuantity + afterWindow.BuyQuoteQuantity
+	appendedWindow.Open = w.Open
+	appendedWindow.Close = afterWindow.Close
+	appendedWindow.High = fixedpoint.Max(w.High, afterWindow.High)
+	appendedWindow.Low = fixedpoint.Min(w.Low, afterWindow.Low)
+	appendedWindow.TradeCount = w.TradeCount + afterWindow.TradeCount
+	appendedWindow.IsClosed = afterWindow.IsClosed
+	return appendedWindow
+}
+
+func (w *WindowBase) AppendBefore(beforeWindow *WindowBase) *WindowBase {
+	if beforeWindow.IsEmpty() {
+		return w
+	}
+	if w.IsEmpty() {
+		return beforeWindow
+	}
+	appendedWindow := NewWindowBase()
+	appendedWindow.StartTime = beforeWindow.StartTime
+	appendedWindow.EndTime = w.EndTime
+	appendedWindow.Quantity = w.Quantity + beforeWindow.Quantity
+	appendedWindow.QuoteQuantity = w.QuoteQuantity + beforeWindow.QuoteQuantity
+	appendedWindow.SellQuantity = w.SellQuantity + beforeWindow.SellQuantity
+	appendedWindow.SellQuoteQuantity = w.SellQuoteQuantity + beforeWindow.SellQuoteQuantity
+	appendedWindow.BuyQuantity = w.BuyQuantity + beforeWindow.BuyQuantity
+	appendedWindow.BuyQuoteQuantity = w.BuyQuoteQuantity + beforeWindow.BuyQuoteQuantity
+	appendedWindow.Open = beforeWindow.Open
+	appendedWindow.Close = w.Close
+	appendedWindow.High = fixedpoint.Max(w.High, beforeWindow.High)
+	appendedWindow.Low = fixedpoint.Min(w.Low, beforeWindow.Low)
+	appendedWindow.TradeCount = w.TradeCount + beforeWindow.TradeCount
+	appendedWindow.IsClosed = w.IsClosed
+	return appendedWindow
+}
+
+func (w *WindowBase) IsEmpty() bool {
+	return w == nil || w.TradeCount == 0
 }
 
 func NewWindowBase() *WindowBase {
@@ -90,6 +195,29 @@ func NewSecond(previous *Second) *Second {
 	}
 }
 
+func (s *Second) GetWindow(from, to time.Time) *WindowBase {
+	if s == nil || s.IsEmpty() {
+		return nil
+	}
+	if s.StartTime.After(to) || s.EndTime.Before(from) {
+		return nil
+	}
+	if s.StartTime.After(from) && s.EndTime.Before(to) {
+		return s.WindowBase
+	}
+	w := NewWindowBase()
+	for _, trade := range s.Trades {
+		if trade.Time.After(to) {
+			continue
+		}
+		if trade.Time.Before(from) {
+			continue
+		}
+		w.Update(trade)
+	}
+	return w
+}
+
 func (s *Second) AppendTrade(trade *types.Trade) {
 	s.Trades = append(s.Trades, trade)
 	s.Update(trade)
@@ -108,6 +236,32 @@ func NewMinute(previous *Minute) *Minute {
 		WindowBase: NewWindowBase(),
 		Previous:   previous,
 	}
+}
+
+func (m *Minute) GetWindow(from, to time.Time) *WindowBase {
+	if m == nil || m.IsEmpty() {
+		return nil
+	}
+	if m.StartTime.After(to) || m.EndTime.Before(from) {
+		return nil
+	}
+	if m.StartTime.After(from) && m.EndTime.Before(to) {
+		return m.WindowBase
+	}
+	w := NewWindowBase()
+	for _, sec := range m.Seconds {
+		if sec == nil || sec.IsEmpty() {
+			continue
+		}
+		if sec.StartTime.After(to) {
+			continue
+		}
+		if sec.EndTime.Before(from) {
+			continue
+		}
+		w = w.AppendAfter(sec.GetWindow(from, to))
+	}
+	return w
 }
 
 func (m *Minute) GetSecond(second int) *Second {
@@ -154,6 +308,39 @@ func NewHour(previous *Hour) *Hour {
 	}
 }
 
+func (h *Hour) GetWindow(from, to time.Time) *WindowBase {
+	if h == nil || h.IsEmpty() {
+		return nil
+	}
+	if h.StartTime.After(to) || h.EndTime.Before(from) {
+		return nil
+	}
+	if h.StartTime.After(from) && h.EndTime.Before(to) {
+		return h.WindowBase
+	}
+	w := NewWindowBase()
+	for _, minute := range h.Minutes {
+		if minute == nil || minute.IsEmpty() {
+			continue
+		}
+		if minute.StartTime.After(to) {
+			continue
+		}
+		if minute.EndTime.Before(from) {
+			continue
+		}
+		w = w.AppendAfter(minute.GetWindow(from, to))
+	}
+	return w
+}
+
+func (h *Hour) GetMinute(minute int) *Minute {
+	if minute < 0 || minute > 59 {
+		return nil
+	}
+	return h.Minutes[minute]
+}
+
 func (h *Hour) AppendTrade(trade *types.Trade) {
 	m := time.Time(trade.Time).Minute()
 	minute := h.Minutes[m]
@@ -189,6 +376,33 @@ func NewDay(previous *Day) *Day {
 		WindowBase: NewWindowBase(),
 		Previous:   previous,
 	}
+}
+
+func (d *Day) GetWindow(from, to time.Time) *WindowBase {
+	if d == nil || d.IsEmpty() {
+		return nil
+	}
+	if d.StartTime.After(to) || d.EndTime.Before(from) {
+		return nil
+
+	}
+	if d.StartTime.After(from) && d.EndTime.Before(to) {
+		return d.WindowBase
+	}
+	w := NewWindowBase()
+	for _, hour := range d.Hours {
+		if hour == nil || hour.IsEmpty() {
+			continue
+		}
+		if hour.StartTime.After(to) {
+			continue
+		}
+		if hour.EndTime.Before(from) {
+			continue
+		}
+		w = w.AppendAfter(hour.GetWindow(from, to))
+	}
+	return w
 }
 
 func (d *Day) GetHour(hour int) *Hour {
@@ -266,6 +480,29 @@ func (k *Kline) GetPersist(from time.Time, to time.Time) ([]*types.Trade, *Windo
 		window.Update(trade)
 	}
 	return trades, window, nil
+}
+
+func (k *Kline) GetWindow(from time.Time, to time.Time) *WindowBase {
+	if k == nil {
+		return nil
+	}
+	if k.StartTime.After(to) || k.EndTime.Before(from) {
+		return nil
+	}
+	w := NewWindowBase()
+	for _, day := range k.Days {
+		if day == nil || day.IsEmpty() {
+			continue
+		}
+		if day.StartTime.After(to) {
+			continue
+		}
+		if day.EndTime.Before(from) {
+			continue
+		}
+		w = w.AppendAfter(day.GetWindow(from, to))
+	}
+	return w
 }
 
 func (k *Kline) Get(from time.Time, to time.Time) ([]*types.Trade, *WindowBase) {

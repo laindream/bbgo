@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"github.com/c9s/bbgo/pkg/bbgo"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
-	"github.com/c9s/bbgo/pkg/strategy/momentummix/aggtrade"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/config"
-	"github.com/c9s/bbgo/pkg/strategy/momentummix/tick"
+	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/aggtrade"
+	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/tick"
 	"github.com/c9s/bbgo/pkg/types"
 	"sort"
 	"time"
@@ -26,8 +26,8 @@ func init() {
 var DefaultSearchDepth = 10
 
 type Strategy struct {
-	Symbols              []string         `json:"symbols"`
-	Interval             types.Interval   `json:"interval"`
+	Symbols []string `json:"symbols"`
+
 	EventIntervalSeconds int              `json:"eventIntervalSeconds"`
 	InfluxDB             *config.InfluxDB `json:"influxDB"`
 	FeeRates             map[string]types.ExchangeFee
@@ -82,21 +82,21 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 	session.MarketDataStream.OnBookTickerUpdate(func(bookTicker types.BookTicker) {
 		s.TickKline[bookTicker.Symbol].AppendTick(&bookTicker)
 		printKey := fmt.Sprintf("%s-%s", bookTicker.Symbol, bookTicker.TransactionTime.Format("2006-01-02 15:04"))
-		if !isTickKlinePrintMap[printKey] {
+		if false && !isTickKlinePrintMap[printKey] {
 			var totalCount int
 			for _, kline := range s.TickKline {
 				totalCount += kline.TickCount
 			}
 			isTickKlinePrintMap[printKey] = true
 			tickers, window := s.TickKline[bookTicker.Symbol].Get(bookTicker.TransactionTime.Truncate(time.Second).
-				Add(-time.Minute*5), bookTicker.TransactionTime.Truncate(time.Second))
+				Add(-time.Minute), bookTicker.TransactionTime.Truncate(time.Second))
 			log.Infof("[%s][%s][%s]5M|%s|ALL Count: %d|%d|%d, Window: %+v", "TickKline", bookTicker.Symbol,
 				bookTicker.TransactionTime.Format("2006-01-02 15:04:05.00000"),
 				bookTicker.Symbol,
 				len(tickers), s.TickKline[bookTicker.Symbol].TickCount, totalCount,
 				window)
 			persist, w, err := s.TickKline[bookTicker.Symbol].GetPersist(bookTicker.TransactionTime.Truncate(time.Second).
-				Add(-time.Minute*5), bookTicker.TransactionTime.Truncate(time.Second))
+				Add(-time.Minute), bookTicker.TransactionTime.Truncate(time.Second))
 			if err != nil {
 				log.Errorf("failed to get persist ticks: %v", err)
 			}
@@ -114,19 +114,22 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 				totalCount += kline.TradeCount
 			}
 			isAggKlinePrintMap[printKey] = true
-			trades, window := s.AggKline[trade.Symbol].Get(time.Time(trade.Time).Truncate(time.Second).
-				Add(-time.Minute), time.Time(trade.Time).Truncate(time.Second))
+			from := time.Time(trade.Time).Truncate(time.Second).Add(-(7*time.Minute + 23*time.Second + 567*time.Millisecond))
+			to := time.Time(trade.Time).Truncate(time.Second).Add(-(2*time.Minute + 56*time.Second + 872*time.Millisecond))
+			trades, window := s.AggKline[trade.Symbol].Get(from, to)
 			log.Infof("[%s][%s][%s]5M|%s|ALL Count: %d|%d|%d, Window: %+v", "AggKline", trade.Symbol,
 				time.Time(trade.Time).Format("2006-01-02 15:04:05.00000"),
 				trade.Symbol,
 				len(trades), s.AggKline[trade.Symbol].TradeCount, totalCount,
 				window)
-			persist, w, err := s.AggKline[trade.Symbol].GetPersist(time.Time(trade.Time).Truncate(time.Second).
-				Add(-time.Minute), time.Time(trade.Time).Truncate(time.Second))
-			if err != nil {
-				log.Errorf("failed to get persist trades: %v", err)
-			}
-			log.Infof("Persist Trades: %d, Window: %+v", len(persist), w)
+			window = s.AggKline[trade.Symbol].GetWindow(from, to)
+			log.Infof("window: %+v", window)
+			//persist, w, err := s.AggKline[trade.Symbol].GetPersist(time.Time(trade.Time).Truncate(time.Second).
+			//	Add(-time.Minute), time.Time(trade.Time).Truncate(time.Second))
+			//if err != nil {
+			//	log.Errorf("failed to get persist trades: %v", err)
+			//}
+			//log.Infof("Persist Trades: %d, Window: %+v", len(persist), w)
 		}
 	})
 	session.MarketDataStream.OnMarketTrade(func(trade types.Trade) {
@@ -137,7 +140,7 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 	})
 
 	session.MarketDataStream.OnBookUpdate(func(book types.SliceOrderBook) {
-		s.printFilteredOrderBook(session, book)
+		//s.printFilteredOrderBook(session, book)
 	})
 
 	session.MarketDataStream.OnBookSnapshot(func(book types.SliceOrderBook) {

@@ -124,6 +124,7 @@ func (c *Client) AppendTick(tick *types.BookTicker) {
 		AddField("sell_size", int64(tick.SellSize)).
 		AddTag("tick_time", strconv.FormatInt(tick.Time.UnixNano(), 10)).
 		AddTag("transaction_time", strconv.FormatInt(tick.TransactionTime.UnixNano(), 10)).
+		AddTag("insert_time", strconv.FormatInt(time.Now().UnixNano(), 10)).
 		SetTime(tick.TransactionTime)
 	c.writeAPI.WritePoint(p)
 }

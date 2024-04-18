@@ -100,6 +100,7 @@ func (b *Buffer) AddUpdate(o types.SliceOrderBook, firstUpdateID int64, finalArg
 		// previous final update id exists means futures depth
 		previousFinalUpdateID = finalArgs[1]
 	}
+	log.Debugf("get update %d -> %d ,previous final update id %d", firstUpdateID, finalUpdateID, previousFinalUpdateID)
 
 	u := Update{
 		FirstUpdateID:         firstUpdateID,
@@ -159,6 +160,10 @@ func (b *Buffer) AddUpdate(o types.SliceOrderBook, firstUpdateID int64, finalArg
 func (b *Buffer) getLastBuffLastUpdateID() int64 {
 	var lastUpdateID int64
 	b.mu.Lock()
+	if len(b.buffer) == 0 {
+		b.mu.Unlock()
+		return 0
+	}
 	if b.isFutures {
 		lastUpdateID = b.buffer[len(b.buffer)-1].PreviousFinalUpdateID
 	} else {

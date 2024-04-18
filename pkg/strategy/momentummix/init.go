@@ -3,8 +3,8 @@ package momentummix
 import (
 	"context"
 	"github.com/c9s/bbgo/pkg/bbgo"
-	"github.com/c9s/bbgo/pkg/strategy/momentummix/aggtrade"
-	"github.com/c9s/bbgo/pkg/strategy/momentummix/tick"
+	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/aggtrade"
+	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/tick"
 	"github.com/c9s/bbgo/pkg/types"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -87,7 +87,7 @@ func (s *Strategy) InitTickKline(session *bbgo.ExchangeSession) error {
 		if err != nil {
 			return errors.Wrapf(err, "failed to create tick kline for symbol: %s,", symbol)
 		}
-		tickKline.IsEnablePersist = true
+		//tickKline.IsEnablePersist = true
 		s.TickKline[symbol] = tickKline
 	}
 	return nil
@@ -100,7 +100,7 @@ func (s *Strategy) InitAggKline(session *bbgo.ExchangeSession) error {
 		if err != nil {
 			return errors.Wrapf(err, "failed to create aggtrade kline for symbol: %s,", symbol)
 		}
-		aggKline.IsEnablePersist = true
+		//aggKline.IsEnablePersist = true
 		s.AggKline[symbol] = aggKline
 	}
 	return nil

@@ -3,7 +3,7 @@ package tick
 import (
 	"github.com/c9s/bbgo/pkg/fixedpoint"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/config"
-	"github.com/c9s/bbgo/pkg/strategy/momentummix/tick/influxpersist"
+	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/tick/influxpersist"
 	"github.com/c9s/bbgo/pkg/types"
 	"math"
 	"time"
