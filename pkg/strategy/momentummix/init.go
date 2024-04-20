@@ -3,6 +3,7 @@ package momentummix
 import (
 	"context"
 	"github.com/c9s/bbgo/pkg/bbgo"
+	"github.com/c9s/bbgo/pkg/strategy/momentummix/capture/imbalance"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/aggtrade"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/tick"
 	"github.com/c9s/bbgo/pkg/types"
@@ -17,6 +18,7 @@ import (
 var log = logrus.New()
 
 func (s *Strategy) Init(ctx context.Context, session *bbgo.ExchangeSession) error {
+	s.StartTime = time.Now()
 	s.InitLogger()
 
 	accountStatus, err := s.GetAccountStatus(ctx, session)
@@ -36,6 +38,7 @@ func (s *Strategy) Init(ctx context.Context, session *bbgo.ExchangeSession) erro
 	if err := s.InitTickKline(session); err != nil {
 		return err
 	}
+	s.InitCapture(session)
 	return nil
 }
 
@@ -115,4 +118,12 @@ func (s *Strategy) InitSearchDepth() {
 
 func (s *Strategy) InitLastTriggerTime() {
 	s.LastTriggerTime = make(map[string]time.Time)
+}
+
+func (s *Strategy) InitCapture(session *bbgo.ExchangeSession) {
+	s.Captures = make(map[string]*imbalance.Capture)
+	for _, symbol := range s.Symbols {
+		capture := imbalance.NewCapture(s.CaptureConfig, symbol, session.Exchange.Name(), s.AggKline[symbol], s.TickKline[symbol])
+		s.Captures[symbol] = capture
+	}
 }

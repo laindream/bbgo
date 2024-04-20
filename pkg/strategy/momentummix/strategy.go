@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"github.com/c9s/bbgo/pkg/bbgo"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
+	"github.com/c9s/bbgo/pkg/strategy/momentummix/capture/imbalance"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/config"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/aggtrade"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/tick"
 	"github.com/c9s/bbgo/pkg/types"
+	"math"
 	"sort"
 	"time"
 )
@@ -28,13 +30,16 @@ var DefaultSearchDepth = 10
 type Strategy struct {
 	Symbols []string `json:"symbols"`
 
-	EventIntervalSeconds int              `json:"eventIntervalSeconds"`
-	InfluxDB             *config.InfluxDB `json:"influxDB"`
+	EventIntervalSeconds int                     `json:"eventIntervalSeconds"`
+	InfluxDB             *config.InfluxDB        `json:"influxDB"`
+	CaptureConfig        imbalance.CaptureConfig `json:"captureConfig"`
 	FeeRates             map[string]types.ExchangeFee
 	SearchDepth          map[string]int
 	LastTriggerTime      map[string]time.Time
 	AggKline             map[string]*aggtrade.Kline
 	TickKline            map[string]*tick.Kline
+	Captures             map[string]*imbalance.Capture
+	StartTime            time.Time
 }
 
 func (s *Strategy) ID() string {
@@ -63,10 +68,10 @@ func (s *Strategy) Subscribe(session *bbgo.ExchangeSession) {
 	for _, symbol := range s.Symbols {
 		session.Subscribe(types.AggTradeChannel, symbol, types.SubscribeOptions{})
 		session.Subscribe(types.BookTickerChannel, symbol, types.SubscribeOptions{})
-		session.Subscribe(types.BookChannel, symbol, types.SubscribeOptions{
-			Depth: types.DepthLevelFull,
-			Speed: types.SpeedHigh,
-		})
+		//session.Subscribe(types.BookChannel, symbol, types.SubscribeOptions{
+		//	Depth: types.DepthLevelFull,
+		//	Speed: types.SpeedHigh,
+		//})
 	}
 }
 
@@ -78,59 +83,86 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 	session.MarketDataStream.OnKLine(func(kline types.KLine) {
 		//printData(kline)
 	})
-	isTickKlinePrintMap := make(map[string]bool)
+	maxAllRatio := 0.0
+	maxBuyRatio := 0.0
+	maxSellRatio := 0.0
+	minAllRatio := math.Inf(1)
+	minBuyRatio := math.Inf(1)
+	minSellRatio := math.Inf(1)
+	maxBuySellRatio := 0.0
+	maxSellBuyRatio := 0.0
+	var isTickKlinePrintMap = make(map[string]bool)
 	session.MarketDataStream.OnBookTickerUpdate(func(bookTicker types.BookTicker) {
 		s.TickKline[bookTicker.Symbol].AppendTick(&bookTicker)
-		printKey := fmt.Sprintf("%s-%s", bookTicker.Symbol, bookTicker.TransactionTime.Format("2006-01-02 15:04"))
-		if false && !isTickKlinePrintMap[printKey] {
-			var totalCount int
-			for _, kline := range s.TickKline {
-				totalCount += kline.TickCount
-			}
-			isTickKlinePrintMap[printKey] = true
-			tickers, window := s.TickKline[bookTicker.Symbol].Get(bookTicker.TransactionTime.Truncate(time.Second).
-				Add(-time.Minute), bookTicker.TransactionTime.Truncate(time.Second))
-			log.Infof("[%s][%s][%s]5M|%s|ALL Count: %d|%d|%d, Window: %+v", "TickKline", bookTicker.Symbol,
-				bookTicker.TransactionTime.Format("2006-01-02 15:04:05.00000"),
-				bookTicker.Symbol,
-				len(tickers), s.TickKline[bookTicker.Symbol].TickCount, totalCount,
-				window)
-			persist, w, err := s.TickKline[bookTicker.Symbol].GetPersist(bookTicker.TransactionTime.Truncate(time.Second).
-				Add(-time.Minute), bookTicker.TransactionTime.Truncate(time.Second))
-			if err != nil {
-				log.Errorf("failed to get persist ticks: %v", err)
-			}
-			log.Infof("Persist Ticks: %d, Window: %+v", len(persist), w)
+		nearDuration := 1*time.Second + 500*time.Millisecond
+		s.Captures[bookTicker.Symbol].PushNearDeepQuantityRateRatioWindowItem(120*time.Second, nearDuration)
+		s.Captures[bookTicker.Symbol].PushNearDeepQuantityRateRatioWindowItem(120*time.Second, nearDuration)
+		s.Captures[bookTicker.Symbol].PushNearDeepQuantityRateRatioWindowItem(120*time.Second, nearDuration)
+		if time.Now().Sub(s.StartTime) < 5*time.Minute {
+			return
 		}
+		from := bookTicker.TransactionTime.Add(-nearDuration)
+		to := bookTicker.TransactionTime
+		allRatio := s.Captures[bookTicker.Symbol].NearDeepQuantityRateRatioWindow.All.GetStatistic(from, to).GetCountAvg()
+		buyRatio := s.Captures[bookTicker.Symbol].NearDeepQuantityRateRatioWindow.Buy.GetStatistic(from, to).GetCountAvg()
+		sellRatio := s.Captures[bookTicker.Symbol].NearDeepQuantityRateRatioWindow.Sell.GetStatistic(from, to).GetCountAvg()
+		buySellRatio := buyRatio / sellRatio
+		sellBuyRatio := sellRatio / buyRatio
+		if allRatio > maxAllRatio {
+			maxAllRatio = allRatio
+			log.Infof("[maxAllRatio] %s: %f, %+v", bookTicker.Symbol, maxAllRatio, bookTicker)
+		}
+		if buyRatio > maxBuyRatio {
+			maxBuyRatio = buyRatio
+			log.Infof("[maxBuyRatio] %s: %f, %+v", bookTicker.Symbol, buyRatio, bookTicker)
+		}
+		if sellRatio > maxSellRatio {
+			maxSellRatio = sellRatio
+			log.Infof("[maxSellRatio] %s: %f, %+v", bookTicker.Symbol, sellRatio, bookTicker)
+		}
+		//if allRatio < minAllRatio {
+		//	minAllRatio = allRatio
+		//	log.Infof("[minAllRatio] %s: %f", bookTicker.Symbol, allRatio)
+		//}
+		//if buyRatio < minBuyRatio {
+		//	minBuyRatio = buyRatio
+		//	log.Infof("[minBuyRatio] %s: %f", bookTicker.Symbol, buyRatio)
+		//}
+		//if sellRatio < minSellRatio {
+		//	minSellRatio = sellRatio
+		//	log.Infof("[minSellRatio] %s: %f", bookTicker.Symbol, sellRatio)
+		//}
+		if buySellRatio > maxBuySellRatio {
+			maxBuySellRatio = buySellRatio
+			log.Infof("[maxBuySellRatio] %s: %f, %+v", bookTicker.Symbol, buySellRatio, bookTicker)
+		}
+		if sellBuyRatio > maxSellBuyRatio {
+			maxSellBuyRatio = sellBuyRatio
+			log.Infof("[maxSellBuyRatio] %s: %f, %+v", bookTicker.Symbol, sellBuyRatio, bookTicker)
+		}
+		printKey := fmt.Sprintf("%s-%s", bookTicker.Symbol, bookTicker.TransactionTime.Format("2006-01-02 15:04"))
+		if false && bookTicker.TransactionTime.Minute()%5 == 0 && !isTickKlinePrintMap[printKey] {
+			isTickKlinePrintMap[printKey] = true
+			log.Infof("[maxAllRatio] %s: %f", bookTicker.Symbol, maxAllRatio)
+			log.Infof("[maxBuyRatio] %s: %f", bookTicker.Symbol, maxBuyRatio)
+			log.Infof("[maxSellRatio] %s: %f", bookTicker.Symbol, maxSellRatio)
+			log.Infof("[minAllRatio] %s: %f", bookTicker.Symbol, minAllRatio)
+			log.Infof("[minBuyRatio] %s: %f", bookTicker.Symbol, minBuyRatio)
+			log.Infof("[minSellRatio] %s: %f", bookTicker.Symbol, minSellRatio)
+			log.Infof("[maxBuySellRatio] %s: %f", bookTicker.Symbol, maxBuySellRatio)
+			log.Infof("[maxSellBuyRatio] %s: %f", bookTicker.Symbol, maxSellBuyRatio)
+			log.Infof("[allRatio] %s: %f", bookTicker.Symbol, allRatio)
+			log.Infof("[buyRatio] %s: %f", bookTicker.Symbol, buyRatio)
+			log.Infof("[sellRatio] %s: %f", bookTicker.Symbol, sellRatio)
+			log.Infof("[buySellRatio] %s: %f", bookTicker.Symbol, buySellRatio)
+			log.Infof("[sellBuyRatio] %s: %f", bookTicker.Symbol, sellBuyRatio)
+		}
+		//s.PrintBookTicker(bookTicker)
 		//s.printData(session, bookTicker)
 	})
-	isAggKlinePrintMap := make(map[string]bool)
 	session.MarketDataStream.OnAggTrade(func(trade types.Trade) {
 		s.AggKline[trade.Symbol].AppendTrade(&trade)
-		printKey := fmt.Sprintf("%s-%s", trade.Symbol, time.Time(trade.Time).Format("2006-01-02 15:04"))
-		if !isAggKlinePrintMap[printKey] {
-			var totalCount int
-			for _, kline := range s.AggKline {
-				totalCount += kline.TradeCount
-			}
-			isAggKlinePrintMap[printKey] = true
-			from := time.Time(trade.Time).Truncate(time.Second).Add(-(7*time.Minute + 23*time.Second + 567*time.Millisecond))
-			to := time.Time(trade.Time).Truncate(time.Second).Add(-(2*time.Minute + 56*time.Second + 872*time.Millisecond))
-			trades, window := s.AggKline[trade.Symbol].Get(from, to)
-			log.Infof("[%s][%s][%s]5M|%s|ALL Count: %d|%d|%d, Window: %+v", "AggKline", trade.Symbol,
-				time.Time(trade.Time).Format("2006-01-02 15:04:05.00000"),
-				trade.Symbol,
-				len(trades), s.AggKline[trade.Symbol].TradeCount, totalCount,
-				window)
-			window = s.AggKline[trade.Symbol].GetWindow(from, to)
-			log.Infof("window: %+v", window)
-			//persist, w, err := s.AggKline[trade.Symbol].GetPersist(time.Time(trade.Time).Truncate(time.Second).
-			//	Add(-time.Minute), time.Time(trade.Time).Truncate(time.Second))
-			//if err != nil {
-			//	log.Errorf("failed to get persist trades: %v", err)
-			//}
-			//log.Infof("Persist Trades: %d, Window: %+v", len(persist), w)
-		}
+		//s.PrintAggTrade(trade)
 	})
 	session.MarketDataStream.OnMarketTrade(func(trade types.Trade) {
 		//printData(trade)

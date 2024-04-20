@@ -41,18 +41,21 @@ type Capture struct {
 	AggTradeDelay time.Duration
 	BookDelay     time.Duration
 	TickDelay     time.Duration
+
+	NearDeepQuantityRateRatioWindow *NearDeepQuantityRateRatioWindow
 }
 
 func NewCapture(config CaptureConfig, symbol string, exchange types.ExchangeName, aggKline *aggtrade.Kline, tickKline *tick.Kline) *Capture {
 	return &Capture{
-		MinInterval:           time.Duration(config.MinIntervalSeconds) * time.Second,
-		MaxInterval:           time.Duration(config.MaxIntervalSeconds) * time.Second,
-		MinContinuousInterval: time.Duration(config.MinContinuousIntervalMilliSeconds) * time.Millisecond,
-		aggKline:              aggKline,
-		tickKline:             tickKline,
-		Symbol:                symbol,
-		Exchange:              exchange,
-		CaptureConfig:         config,
+		MinInterval:                     time.Duration(config.MinIntervalSeconds) * time.Second,
+		MaxInterval:                     time.Duration(config.MaxIntervalSeconds) * time.Second,
+		MinContinuousInterval:           time.Duration(config.MinContinuousIntervalMilliSeconds) * time.Millisecond,
+		aggKline:                        aggKline,
+		tickKline:                       tickKline,
+		Symbol:                          symbol,
+		Exchange:                        exchange,
+		CaptureConfig:                   config,
+		NearDeepQuantityRateRatioWindow: NewNearDeepQuantityRateRatioWindow(30),
 	}
 }
 
