@@ -405,6 +405,10 @@ func (e *Exchange) NewStream() types.Stream {
 	return NewStream(e.client, e)
 }
 
+func (e *Exchange) Query24hrMarketStat(ctx context.Context, symbol string) (*types.MarketStats, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (e *Exchange) QueryKLines(
 	ctx context.Context, symbol string, interval types.Interval, options types.KLineQueryOptions,
 ) ([]types.KLine, error) {

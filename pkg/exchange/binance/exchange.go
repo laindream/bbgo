@@ -1206,6 +1206,41 @@ func (e *Exchange) QueryKLines(
 	return kLines, nil
 }
 
+func (e *Exchange) Query24hrMarketStat(ctx context.Context, symbol string) (*types.MarketStats, error) {
+	if e.IsFutures {
+		stats, err := e.futuresClient.NewListPriceChangeStatsService().Symbol(symbol).Do(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if len(stats) != 1 {
+			return nil, errors.New("binance: Query24hrMarketStat failed")
+		}
+		openTimeSec := stats[0].OpenTime / 1e3
+		openTimeNano := stats[0].OpenTime % 1e3 * 1e6
+		closeTimeSec := stats[0].CloseTime / 1e3
+		closeTimeNano := stats[0].CloseTime % 1e3 * 1e6
+		return &types.MarketStats{
+			Symbol:             symbol,
+			PriceChange:        stats[0].PriceChange,
+			PriceChangePercent: stats[0].PriceChangePercent,
+			WeightedAvgPrice:   stats[0].WeightedAvgPrice,
+			LastPrice:          stats[0].LastPrice,
+			LastQuantity:       stats[0].LastQuantity,
+			OpenPrice:          stats[0].OpenPrice,
+			HighPrice:          stats[0].HighPrice,
+			LowPrice:           stats[0].LowPrice,
+			Volume:             stats[0].Volume,
+			QuoteVolume:        stats[0].QuoteVolume,
+			OpenTime:           time.Unix(openTimeSec, openTimeNano),
+			CloseTime:          time.Unix(closeTimeSec, closeTimeNano),
+			FirstId:            stats[0].FirstID,
+			LastId:             stats[0].LastID,
+			Count:              stats[0].Count,
+		}, nil
+	}
+	return nil, errors.New("binance: Query24hrMarketStat is not supported for spot market")
+}
+
 func (e *Exchange) queryMarginTrades(
 	ctx context.Context, symbol string, options *types.TradeQueryOptions,
 ) (trades []types.Trade, err error) {

@@ -146,6 +146,10 @@ func (e *Exchange) QueryTicker(ctx context.Context, symbol string) (*types.Ticke
 	return &ticker, nil
 }
 
+func (e *Exchange) Query24hrMarketStat(ctx context.Context, symbol string) (*types.MarketStats, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (e *Exchange) QueryTickers(ctx context.Context, symbols ...string) (map[string]types.Ticker, error) {
 	tickers := map[string]types.Ticker{}
 	if len(symbols) > 0 {

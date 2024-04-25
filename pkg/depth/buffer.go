@@ -122,8 +122,8 @@ func (b *Buffer) AddUpdate(o types.SliceOrderBook, firstUpdateID int64, finalArg
 	b.mu.Lock()
 	if b.snapshot == nil {
 		b.buffer = append(b.buffer, u)
-		go b.once.Do(func() {
-			b.tryFetch()
+		b.once.Do(func() {
+			go b.tryFetch()
 		})
 		b.mu.Unlock()
 		return nil

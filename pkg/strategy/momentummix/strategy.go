@@ -8,8 +8,10 @@ import (
 	"github.com/c9s/bbgo/pkg/fixedpoint"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/capture/imbalance"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/config"
+	"github.com/c9s/bbgo/pkg/strategy/momentummix/history"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/aggtrade"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/tick"
+	"github.com/c9s/bbgo/pkg/strategy/momentummix/trigger"
 	"github.com/c9s/bbgo/pkg/types"
 	"math"
 	"sort"
@@ -33,13 +35,18 @@ type Strategy struct {
 	EventIntervalSeconds int                     `json:"eventIntervalSeconds"`
 	InfluxDB             *config.InfluxDB        `json:"influxDB"`
 	CaptureConfig        imbalance.CaptureConfig `json:"captureConfig"`
-	FeeRates             map[string]types.ExchangeFee
-	SearchDepth          map[string]int
-	LastTriggerTime      map[string]time.Time
-	AggKline             map[string]*aggtrade.Kline
-	TickKline            map[string]*tick.Kline
-	Captures             map[string]*imbalance.Capture
-	StartTime            time.Time
+
+	FeeRates           map[string]types.ExchangeFee
+	HistoryMarketStats map[string]*history.MarketHistory
+
+	SearchDepth     map[string]int
+	LastTriggerTime map[string]time.Time
+	AggKline        map[string]*aggtrade.Kline
+	TickKline       map[string]*tick.Kline
+	Captures        map[string]*imbalance.Capture
+	StartTime       time.Time
+
+	QuoteQuantityExceedTriggers map[string]*trigger.QuoteQuantityExceedTrigger
 }
 
 func (s *Strategy) ID() string {
@@ -92,15 +99,17 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 	maxBuySellRatio := 0.0
 	maxSellBuyRatio := 0.0
 	var isTickKlinePrintMap = make(map[string]bool)
+
 	session.MarketDataStream.OnBookTickerUpdate(func(bookTicker types.BookTicker) {
 		s.TickKline[bookTicker.Symbol].AppendTick(&bookTicker)
-		nearDuration := 1*time.Second + 500*time.Millisecond
+		nearDuration := 1000 * time.Millisecond
 		s.Captures[bookTicker.Symbol].PushNearDeepQuantityRateRatioWindowItem(120*time.Second, nearDuration)
-		s.Captures[bookTicker.Symbol].PushNearDeepQuantityRateRatioWindowItem(120*time.Second, nearDuration)
-		s.Captures[bookTicker.Symbol].PushNearDeepQuantityRateRatioWindowItem(120*time.Second, nearDuration)
-		if time.Now().Sub(s.StartTime) < 5*time.Minute {
+		//s.Captures[bookTicker.Symbol].PushNearQuantityRateWindowItem()
+		if time.Now().Sub(s.StartTime) < time.Minute {
 			return
 		}
+		s.QuoteQuantityExceedTriggers[bookTicker.Symbol].BookTickerPush(bookTicker)
+		return
 		from := bookTicker.TransactionTime.Add(-nearDuration)
 		to := bookTicker.TransactionTime
 		allRatio := s.Captures[bookTicker.Symbol].NearDeepQuantityRateRatioWindow.All.GetStatistic(from, to).GetCountAvg()
@@ -141,7 +150,9 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 			log.Infof("[maxSellBuyRatio] %s: %f, %+v", bookTicker.Symbol, sellBuyRatio, bookTicker)
 		}
 		printKey := fmt.Sprintf("%s-%s", bookTicker.Symbol, bookTicker.TransactionTime.Format("2006-01-02 15:04"))
-		if false && bookTicker.TransactionTime.Minute()%5 == 0 && !isTickKlinePrintMap[printKey] {
+		if !isTickKlinePrintMap[printKey] {
+			stat := s.HistoryMarketStats[bookTicker.Symbol].GetStat()
+			log.Infof("[stat] %s: %+v", bookTicker.Symbol, stat)
 			isTickKlinePrintMap[printKey] = true
 			log.Infof("[maxAllRatio] %s: %f", bookTicker.Symbol, maxAllRatio)
 			log.Infof("[maxBuyRatio] %s: %f", bookTicker.Symbol, maxBuyRatio)

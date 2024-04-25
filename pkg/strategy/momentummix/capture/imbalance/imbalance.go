@@ -43,6 +43,7 @@ type Capture struct {
 	TickDelay     time.Duration
 
 	NearDeepQuantityRateRatioWindow *NearDeepQuantityRateRatioWindow
+	NearQuantityRateWindow          *NearQuantityRateWindow
 }
 
 func NewCapture(config CaptureConfig, symbol string, exchange types.ExchangeName, aggKline *aggtrade.Kline, tickKline *tick.Kline) *Capture {
@@ -56,6 +57,7 @@ func NewCapture(config CaptureConfig, symbol string, exchange types.ExchangeName
 		Exchange:                        exchange,
 		CaptureConfig:                   config,
 		NearDeepQuantityRateRatioWindow: NewNearDeepQuantityRateRatioWindow(30),
+		NearQuantityRateWindow:          NewNearQuantityRateWindow(30, time.Second+500*time.Millisecond),
 	}
 }
 

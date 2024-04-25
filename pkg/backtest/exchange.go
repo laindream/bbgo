@@ -314,6 +314,10 @@ func (e *Exchange) QueryMarkets(ctx context.Context) (types.MarketMap, error) {
 	return e.markets, nil
 }
 
+func (e *Exchange) Query24hrMarketStat(ctx context.Context, symbol string) (*types.MarketStats, error) {
+	return nil, ErrUnimplemented
+}
+
 func (e *Exchange) QueryDepositHistory(
 	ctx context.Context, asset string, since, until time.Time,
 ) (allDeposits []types.Deposit, err error) {

@@ -4,8 +4,10 @@ import (
 	"context"
 	"github.com/c9s/bbgo/pkg/bbgo"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/capture/imbalance"
+	"github.com/c9s/bbgo/pkg/strategy/momentummix/history"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/aggtrade"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/tick"
+	"github.com/c9s/bbgo/pkg/strategy/momentummix/trigger"
 	"github.com/c9s/bbgo/pkg/types"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -30,6 +32,7 @@ func (s *Strategy) Init(ctx context.Context, session *bbgo.ExchangeSession) erro
 	if err := s.InitFeeRates(ctx, session); err != nil {
 		return err
 	}
+	s.InitHistoryMarketStats(ctx, session)
 	s.InitSearchDepth()
 	s.InitLastTriggerTime()
 	if err := s.InitAggKline(session); err != nil {
@@ -39,6 +42,7 @@ func (s *Strategy) Init(ctx context.Context, session *bbgo.ExchangeSession) erro
 		return err
 	}
 	s.InitCapture(session)
+	s.InitQuoteQuantityExceedTrigger()
 	return nil
 }
 
@@ -48,6 +52,42 @@ func (s *Strategy) GetAccountStatus(ctx context.Context, session *bbgo.ExchangeS
 		return "", err
 	}
 	return accountStatus, nil
+}
+
+var DefaultAdaptNearQuantityRate = 5.0
+
+func (s *Strategy) InitQuoteQuantityExceedTrigger() {
+	s.QuoteQuantityExceedTriggers = make(map[string]*trigger.QuoteQuantityExceedTrigger)
+	for _, symbol := range s.Symbols {
+		trig := &trigger.QuoteQuantityExceedTrigger{
+			Symbol:                                 symbol,
+			AdaptTriggerNearQuoteQuantityRateRatio: 5,
+			AdaptKeepNearQuoteQuantityRateRatio:    5,
+			FirstTriggerTime:                       nil,
+			FinalTriggerTime:                       nil,
+			LastTriggerTime:                        nil,
+			Capture:                                s.Captures[symbol],
+			History:                                s.HistoryMarketStats[symbol],
+			AggKline:                               s.AggKline[symbol],
+			MinWindowTradeCount:                    10,
+			MaxWindowTradeCount:                    100,
+			MinTriggerNearDuration:                 500 * time.Millisecond,
+			TriggerNearDuration:                    1000 * time.Millisecond,
+			MaxTriggerNearDuration:                 2000 * time.Millisecond,
+			MinKeepNearDuration:                    250 * time.Millisecond,
+			KeepNearDuration:                       500 * time.Millisecond,
+			MaxKeepNearDuration:                    5000 * time.Millisecond,
+			MinKeepDuration:                        10000 * time.Millisecond,
+			MaxKeepDuration:                        100000 * time.Millisecond,
+			MinTriggerInterval:                     10 * time.Minute,
+			MaxTriggerInterval:                     120 * time.Minute,
+			OnTrigger:                              func(book types.BookTicker) {},
+			OnUnTrigger:                            func(book types.BookTicker) {},
+			OnKeepTrigger:                          func(book types.BookTicker) {},
+			Logger:                                 log,
+		}
+		s.QuoteQuantityExceedTriggers[symbol] = trig
+	}
 }
 
 func (s *Strategy) InitLogger() {
@@ -66,7 +106,20 @@ func (s *Strategy) InitLogger() {
 			}
 		}
 	}
+	log.SetFormatter(&logrus.TextFormatter{
+		TimestampFormat: "2006-01-02 15:04:05.00000",
+		FullTimestamp:   true,
+	})
 	log.Out = io.MultiWriter(os.Stdout, file)
+}
+
+func (s *Strategy) InitHistoryMarketStats(ctx context.Context, session *bbgo.ExchangeSession) {
+	s.HistoryMarketStats = make(map[string]*history.MarketHistory)
+	for _, symbol := range s.Symbols {
+		marketStats := history.NewMarketHistory(symbol, 1*time.Hour, session)
+		marketStats.Symbol = symbol
+		s.HistoryMarketStats[symbol] = marketStats
+	}
 }
 
 func (s *Strategy) InitFeeRates(ctx context.Context, session *bbgo.ExchangeSession) error {

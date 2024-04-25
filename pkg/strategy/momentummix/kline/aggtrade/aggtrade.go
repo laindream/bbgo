@@ -27,6 +27,53 @@ type WindowBase struct {
 	TradeCount        int              `json:"tradeCount" db:"trade_count"`
 }
 
+var TradeDirectionAll = "all"
+var TradeDirectionSell = "sell"
+var TradeDirectionBuy = "buy"
+
+func (w *WindowBase) GetQuoteQuantityRate(direction string, duration time.Duration) float64 {
+	if w == nil || w.IsEmpty() {
+		return 0
+	}
+	var qu float64
+	if direction == TradeDirectionAll {
+		qu = w.QuoteQuantity.Float64()
+	}
+	if direction == TradeDirectionSell {
+		qu = w.SellQuoteQuantity.Float64()
+	}
+	if direction == TradeDirectionBuy {
+		qu = w.BuyQuoteQuantity.Float64()
+	}
+	fixedTimeSecond := duration.Seconds()
+	return qu / fixedTimeSecond
+}
+
+func (w *WindowBase) GetQuantityRate(direction string, duration time.Duration) float64 {
+	if w == nil || w.IsEmpty() {
+		return 0
+	}
+	var qu float64
+	if direction == TradeDirectionAll {
+		qu = w.Quantity.Float64()
+	}
+	if direction == TradeDirectionSell {
+		qu = w.SellQuantity.Float64()
+	}
+	if direction == TradeDirectionBuy {
+		qu = w.BuyQuantity.Float64()
+	}
+	fixedTimeSecond := duration.Seconds()
+	return qu / fixedTimeSecond
+}
+
+func (w *WindowBase) GetTradeCount() int {
+	if w == nil {
+		return 0
+	}
+	return w.TradeCount
+}
+
 func (w *WindowBase) GetFluctuation() float64 {
 	if w.TradeCount == 0 {
 		return 0

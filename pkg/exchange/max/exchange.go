@@ -92,6 +92,10 @@ func (e *Exchange) QueryTicker(ctx context.Context, symbol string) (*types.Ticke
 	}, nil
 }
 
+func (e *Exchange) Query24hrMarketStat(ctx context.Context, symbol string) (*types.MarketStats, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (e *Exchange) QueryTickers(ctx context.Context, symbol ...string) (map[string]types.Ticker, error) {
 	if err := e.marketDataLimiter.Wait(ctx); err != nil {
 		return nil, err

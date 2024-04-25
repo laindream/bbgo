@@ -3,6 +3,7 @@ package types
 import (
 	"math"
 	"strconv"
+	"time"
 
 	"github.com/leekchan/accounting"
 
@@ -219,7 +220,7 @@ func (m Market) CanonicalizeVolume(val fixedpoint.Value) float64 {
 	return math.Trunc(p*val.Float64()) / p
 }
 
-func (m Market) AdjustQuantityByMinQuantity(quantity fixedpoint.Value)  fixedpoint.Value {
+func (m Market) AdjustQuantityByMinQuantity(quantity fixedpoint.Value) fixedpoint.Value {
 	return fixedpoint.Max(quantity, m.MinQuantity)
 }
 
@@ -248,4 +249,23 @@ func (m MarketMap) Add(market Market) {
 func (m MarketMap) Has(symbol string) bool {
 	_, ok := m[symbol]
 	return ok
+}
+
+type MarketStats struct {
+	Symbol             string    `json:"symbol"`
+	PriceChange        string    `json:"priceChange"`
+	PriceChangePercent string    `json:"priceChangePercent"`
+	WeightedAvgPrice   string    `json:"weightedAvgPrice"`
+	LastPrice          string    `json:"lastPrice"`
+	LastQuantity       string    `json:"lastQty"`
+	OpenPrice          string    `json:"openPrice"`
+	HighPrice          string    `json:"highPrice"`
+	LowPrice           string    `json:"lowPrice"`
+	Volume             string    `json:"volume"`
+	QuoteVolume        string    `json:"quoteVolume"`
+	OpenTime           time.Time `json:"openTime"`
+	CloseTime          time.Time `json:"closeTime"`
+	FirstId            int64     `json:"firstId"`
+	LastId             int64     `json:"lastId"`
+	Count              int64     `json:"count"`
 }
