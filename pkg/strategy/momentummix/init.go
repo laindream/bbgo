@@ -69,22 +69,44 @@ func (s *Strategy) InitQuoteQuantityExceedTrigger() {
 			Capture:                                s.Captures[symbol],
 			History:                                s.HistoryMarketStats[symbol],
 			AggKline:                               s.AggKline[symbol],
-			MinWindowTradeCount:                    10,
-			MaxWindowTradeCount:                    100,
-			MinTriggerNearDuration:                 500 * time.Millisecond,
-			TriggerNearDuration:                    1000 * time.Millisecond,
-			MaxTriggerNearDuration:                 2000 * time.Millisecond,
-			MinKeepNearDuration:                    250 * time.Millisecond,
-			KeepNearDuration:                       500 * time.Millisecond,
+			TickKline:                              s.TickKline[symbol],
+			MinTriggerWindowTradeCount:             15,
+			MaxTriggerWindowTradeCount:             75,
+			MinKeepWindowTradeCount:                20,
+			MaxKeepWindowTradeCount:                100,
+			MinTriggerNearDuration:                 250 * time.Millisecond,
+			TriggerNearDuration:                    500 * time.Millisecond,
+			MaxTriggerNearDuration:                 8000 * time.Millisecond,
+			MinKeepNearDuration:                    1000 * time.Millisecond,
+			KeepNearDuration:                       1000 * time.Millisecond,
 			MaxKeepNearDuration:                    5000 * time.Millisecond,
 			MinKeepDuration:                        10000 * time.Millisecond,
 			MaxKeepDuration:                        100000 * time.Millisecond,
-			MinTriggerInterval:                     10 * time.Minute,
-			MaxTriggerInterval:                     120 * time.Minute,
+			MinTriggerInterval:                     20 * time.Minute,
+			MaxTriggerInterval:                     60 * time.Minute,
 			OnTrigger:                              func(book types.BookTicker) {},
 			OnUnTrigger:                            func(book types.BookTicker) {},
 			OnKeepTrigger:                          func(book types.BookTicker) {},
 			Logger:                                 log,
+
+			MinImbalanceThresholdTriggerRate: 2.0,
+			ImbalanceThresholdTriggerRate:    6.0,
+			MaxImbalanceThresholdTriggerRate: 1000.0,
+			MinStopLossRate:                  0.0015,
+			StopLossRate:                     0.0015,
+			MaxStopLossRate:                  0.012,
+			MinNearPriceFluctuationRate:      0.001,
+			NearPriceFluctuationRate:         0.001,
+			MaxNearPriceFluctuationRate:      0.008,
+			NearPriceFluctuationDuration:     8 * time.Second,
+			MinFarPriceFluctuationRate:       0.0016,
+			FarPriceFluctuationRate:          0.0016,
+			MaxFarPriceFluctuationRate:       0.0128,
+			FarPriceFluctuationDuration:      30 * time.Second,
+			TakeProfitRate:                   0.4,
+			MinProfitThresholdRate:           0.003,
+			ProfitThresholdRate:              0.003,
+			MaxProfitThresholdRate:           0.024,
 		}
 		s.QuoteQuantityExceedTriggers[symbol] = trig
 	}
@@ -139,7 +161,7 @@ func (s *Strategy) InitFeeRates(ctx context.Context, session *bbgo.ExchangeSessi
 func (s *Strategy) InitTickKline(session *bbgo.ExchangeSession) error {
 	s.TickKline = make(map[string]*tick.Kline)
 	for _, symbol := range s.Symbols {
-		tickKline, err := tick.NewKline(10, *s.InfluxDB, symbol, session.Exchange.Name())
+		tickKline, err := tick.NewKline(3, s.InfluxDB, symbol, session.Exchange.Name())
 		if err != nil {
 			return errors.Wrapf(err, "failed to create tick kline for symbol: %s,", symbol)
 		}
@@ -152,7 +174,7 @@ func (s *Strategy) InitTickKline(session *bbgo.ExchangeSession) error {
 func (s *Strategy) InitAggKline(session *bbgo.ExchangeSession) error {
 	s.AggKline = make(map[string]*aggtrade.Kline)
 	for _, symbol := range s.Symbols {
-		aggKline, err := aggtrade.NewKline(10, *s.InfluxDB, symbol, session.Exchange.Name())
+		aggKline, err := aggtrade.NewKline(3, s.InfluxDB, symbol, session.Exchange.Name())
 		if err != nil {
 			return errors.Wrapf(err, "failed to create aggtrade kline for symbol: %s,", symbol)
 		}

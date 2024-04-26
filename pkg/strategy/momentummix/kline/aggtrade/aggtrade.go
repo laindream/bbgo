@@ -5,7 +5,6 @@ import (
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/config"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/aggtrade/influxpersist"
 	"github.com/c9s/bbgo/pkg/types"
-	log "github.com/sirupsen/logrus"
 	"math"
 	"time"
 )
@@ -224,7 +223,7 @@ type Day struct {
 
 type Kline struct {
 	Days            map[string]*Day
-	MaxDays         int
+	MaxHours        int
 	StartTime       time.Time
 	EndTime         time.Time
 	TradeCount      int
@@ -240,6 +239,22 @@ func NewSecond(previous *Second) *Second {
 		WindowBase: NewWindowBase(),
 		Previous:   previous,
 	}
+}
+
+func (s *Second) RemoveBefore(t time.Time) (allRemove bool) {
+	if s == nil {
+		return false
+	}
+	if s.StartTime.After(t) {
+		return false
+	}
+	if s.EndTime.Before(t) {
+		s.Trades = nil
+		s.WindowBase = nil
+		s.Previous = nil
+		return true
+	}
+	return false
 }
 
 func (s *Second) GetWindow(from, to time.Time) *WindowBase {
@@ -283,6 +298,47 @@ func NewMinute(previous *Minute) *Minute {
 		WindowBase: NewWindowBase(),
 		Previous:   previous,
 	}
+}
+
+func (m *Minute) RemoveBefore(t time.Time) (allRemove bool) {
+	if m == nil {
+		return false
+	}
+	if m.StartTime.After(t) {
+		return false
+	}
+	if m.EndTime.Before(t) {
+		m.Seconds = nil
+		m.WindowBase = nil
+		m.Previous = nil
+		return true
+	}
+	emptyCount := 0
+	isLastAllRemove := false
+	for i, sec := range m.Seconds {
+		if sec == nil {
+			emptyCount++
+			continue
+		}
+		isAllRemove := sec.RemoveBefore(t)
+		if isAllRemove {
+			m.Seconds[i] = nil
+			emptyCount++
+			isLastAllRemove = true
+			continue
+		}
+		if isLastAllRemove {
+			m.StartTime = sec.StartTime
+			isLastAllRemove = false
+		}
+	}
+	if emptyCount == len(m.Seconds) {
+		m.Seconds = nil
+		m.WindowBase = nil
+		m.Previous = nil
+		return true
+	}
+	return false
 }
 
 func (m *Minute) GetWindow(from, to time.Time) *WindowBase {
@@ -355,6 +411,47 @@ func NewHour(previous *Hour) *Hour {
 	}
 }
 
+func (h *Hour) RemoveBefore(t time.Time) (allRemove bool) {
+	if h == nil {
+		return false
+	}
+	if h.StartTime.After(t) {
+		return false
+	}
+	if h.EndTime.Before(t) {
+		h.Minutes = nil
+		h.WindowBase = nil
+		h.Previous = nil
+		return true
+	}
+	emptyCount := 0
+	isLastAllRemove := false
+	for i, minute := range h.Minutes {
+		if minute == nil {
+			emptyCount++
+			continue
+		}
+		isAllRemove := minute.RemoveBefore(t)
+		if isAllRemove {
+			h.Minutes[i] = nil
+			emptyCount++
+			isLastAllRemove = true
+			continue
+		}
+		if isLastAllRemove {
+			h.StartTime = minute.StartTime
+			isLastAllRemove = false
+		}
+	}
+	if emptyCount == len(h.Minutes) {
+		h.Minutes = nil
+		h.WindowBase = nil
+		h.Previous = nil
+		return true
+	}
+	return false
+}
+
 func (h *Hour) GetWindow(from, to time.Time) *WindowBase {
 	if h == nil || h.IsEmpty() {
 		return nil
@@ -425,6 +522,47 @@ func NewDay(previous *Day) *Day {
 	}
 }
 
+func (d *Day) RemoveBefore(t time.Time) (allRemove bool) {
+	if d == nil {
+		return false
+	}
+	if d.StartTime.After(t) {
+		return false
+	}
+	if d.EndTime.Before(t) {
+		d.Hours = nil
+		d.WindowBase = nil
+		d.Previous = nil
+		return true
+	}
+	emptyCount := 0
+	isLastAllRemove := false
+	for i, hour := range d.Hours {
+		if hour == nil {
+			emptyCount++
+			continue
+		}
+		isAllRemove := hour.RemoveBefore(t)
+		if isAllRemove {
+			d.Hours[i] = nil
+			emptyCount++
+			isLastAllRemove = true
+			continue
+		}
+		if isLastAllRemove {
+			d.StartTime = hour.StartTime
+			isLastAllRemove = false
+		}
+	}
+	if emptyCount == len(d.Hours) {
+		d.Hours = nil
+		d.WindowBase = nil
+		d.Previous = nil
+		return true
+	}
+	return false
+}
+
 func (d *Day) GetWindow(from, to time.Time) *WindowBase {
 	if d == nil || d.IsEmpty() {
 		return nil
@@ -488,24 +626,49 @@ func (d *Day) CloseWindow() {
 	d.Hours[23].CloseWindow()
 }
 
-func NewKline(maxDays int, influxConfig config.InfluxDB, symbol string, exchange types.ExchangeName) (*Kline, error) {
-	influxClient, err := influxpersist.NewClient(
-		influxConfig.URL,
-		influxConfig.Token,
-		influxConfig.Org,
-		influxpersist.Bucket,
-		symbol,
-		exchange)
-	if err != nil {
-		return nil, err
+func NewKline(maxHours int, influxConfig *config.InfluxDB, symbol string, exchange types.ExchangeName) (*Kline, error) {
+	var influxClient *influxpersist.Client
+	var err error
+	if influxConfig != nil {
+		influxClient, err = influxpersist.NewClient(
+			influxConfig.URL,
+			influxConfig.Token,
+			influxConfig.Org,
+			influxpersist.Bucket,
+			symbol,
+			exchange)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return &Kline{
 		Days:         make(map[string]*Day),
-		MaxDays:      maxDays,
+		MaxHours:     maxHours,
 		influxClient: influxClient,
 		Symbol:       symbol,
 		Exchange:     exchange,
 	}, nil
+}
+
+func (k *Kline) RemoveBefore(t time.Time) {
+	for date, day := range k.Days {
+		if day == nil {
+			continue
+		}
+		if day.RemoveBefore(t) {
+			delete(k.Days, date)
+		}
+	}
+	var startTime time.Time
+	for _, day := range k.Days {
+		if day == nil {
+			continue
+		}
+		if startTime.IsZero() || day.StartTime.Before(startTime) {
+			startTime = day.StartTime
+		}
+	}
+	k.StartTime = startTime
 }
 
 func (k *Kline) GetDay(date string) *Day {
@@ -617,9 +780,6 @@ func (k *Kline) AppendTrade(trade *types.Trade) {
 	date := (time.Time)(trade.Time).Format("2006-01-02")
 	day := k.Days[date]
 	if day == nil {
-		if len(k.Days) > k.MaxDays {
-			k.RemoveOldestDay()
-		}
 		previousDate := time.Time(trade.Time).AddDate(0, 0, -1).Format("2006-01-02")
 		if previousDay := k.Days[previousDate]; previousDay != nil {
 			previousDay.CloseWindow()
@@ -629,6 +789,12 @@ func (k *Kline) AppendTrade(trade *types.Trade) {
 	}
 	day.AppendTrade(trade)
 	k.Update(trade)
+
+	hoursCount := trade.Time.Time().Sub(k.StartTime).Hours()
+	if k.MaxHours != 0 && int(hoursCount) > k.MaxHours {
+		k.RemoveBefore(trade.Time.Time().Add(-time.Duration(k.MaxHours) * time.Hour))
+	}
+
 	if k.IsEnablePersist {
 		k.influxClient.AppendTrade(trade)
 	}
@@ -640,36 +806,6 @@ func (k *Kline) Update(trade *types.Trade) {
 	}
 	k.EndTime = time.Time(trade.Time)
 	k.TradeCount++
-}
-
-func (k *Kline) RemoveOldestDay() {
-	// Check if Days map is not empty
-	if len(k.Days) == 0 {
-		return // Nothing to remove
-	}
-
-	var oldestDate string
-	var oldestTime time.Time
-
-	// Initialize oldestTime to a very future time
-	for date := range k.Days {
-		dayTime, err := time.Parse("2006-01-02", date)
-		if err != nil {
-			log.Errorf("failed to parse date: %s", date)
-			continue // skip if the date is not parseable
-		}
-
-		// Check if this day is the oldest one
-		if oldestTime.IsZero() || dayTime.Before(oldestTime) {
-			oldestTime = dayTime
-			oldestDate = date
-		}
-	}
-
-	if oldestDate != "" {
-		// Remove the oldest day from the map
-		delete(k.Days, oldestDate)
-	}
 }
 
 func (k *Kline) CloseKline() {
