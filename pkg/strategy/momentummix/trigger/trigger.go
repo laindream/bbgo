@@ -29,6 +29,7 @@ type QuoteQuantityExceedTrigger struct {
 	LastTriggerTime                        *time.Time
 	OngoingStopLossRate                    float64
 	OngoingProfitThresholdRate             float64
+	OngoingImbalanceThresholdRate          float64
 
 	Capture   *imbalance.Capture
 	History   *history.MarketHistory
@@ -59,7 +60,8 @@ type QuoteQuantityExceedTrigger struct {
 	MinImbalanceThresholdTriggerRate float64
 	ImbalanceThresholdTriggerRate    float64
 	MaxImbalanceThresholdTriggerRate float64
-	ImbalanceThresholdKeepRate       float64
+	MinImbalanceThresholdKeepRate    float64
+	MaxImbalanceThresholdKeepRate    float64
 
 	MaxStopLossRate float64
 	MinStopLossRate float64
@@ -106,6 +108,8 @@ func (q *QuoteQuantityExceedTrigger) IsTrigger() bool {
 }
 
 func (q *QuoteQuantityExceedTrigger) Trigger(bookTicker types.BookTicker) {
+	q.OngoingProfitThresholdRate = q.ProfitThresholdRate
+	q.OngoingStopLossRate = q.StopLossRate
 	q.TotalTriggerCount++
 	if q.LastTriggerTime != nil && bookTicker.TransactionTime.Sub(*q.LastTriggerTime) > q.MaxTriggerInterval {
 		q.AdaptTriggerNearQuoteQuantityRateRatio = q.AdaptTriggerNearQuoteQuantityRateRatio * 0.75
@@ -202,41 +206,92 @@ func (q *QuoteQuantityExceedTrigger) BookTickerPush(bookTicker types.BookTicker)
 		keepBuyNearQuoteQuantityRate := keepNearWindow.GetQuoteQuantityRate(aggtrade.TradeDirectionBuy, q.KeepNearDuration)
 		keepSellNearQuoteQuantityRate := keepNearWindow.GetQuoteQuantityRate(aggtrade.TradeDirectionSell, q.KeepNearDuration)
 		keepRatio := keepNearQuoteQuantityRate / historyQuoteQuantityRate
+		keepDirection := ""
+		var imbalanceTriggerRate float64
+		if keepBuyNearQuoteQuantityRate > keepSellNearQuoteQuantityRate {
+			keepDirection = "buy"
+			imbalanceTriggerRate = keepBuyNearQuoteQuantityRate / keepSellNearQuoteQuantityRate
+		} else {
+			keepDirection = "sell"
+			imbalanceTriggerRate = keepSellNearQuoteQuantityRate / keepBuyNearQuoteQuantityRate
+		}
+		imbalanceKeepRateCheckPass := false
+		newOngoingImbalanceThresholdRate := (q.ImbalanceThresholdTriggerRate-1)/2 + 1
+		if newOngoingImbalanceThresholdRate > q.MinImbalanceThresholdKeepRate && newOngoingImbalanceThresholdRate < q.MaxImbalanceThresholdKeepRate {
+			q.OngoingImbalanceThresholdRate = newOngoingImbalanceThresholdRate
+		} else if newOngoingImbalanceThresholdRate <= q.MinImbalanceThresholdKeepRate {
+			q.OngoingImbalanceThresholdRate = q.MinImbalanceThresholdKeepRate
+		} else if newOngoingImbalanceThresholdRate >= q.MaxImbalanceThresholdKeepRate {
+			q.OngoingImbalanceThresholdRate = q.MaxImbalanceThresholdKeepRate
+		}
+		if keepDirection == q.Action && imbalanceTriggerRate > q.OngoingImbalanceThresholdRate {
+			imbalanceKeepRateCheckPass = true
+		}
 		q.RecordTicker(bookTicker)
 		isKeep := true
 		unTriggerReason := ""
 		if q.Action == ActionBuy {
 			buyPriceFluctuationRate := (bookTicker.Buy.Float64() - q.FirstTriggerTicker.Buy.Float64()) / q.FirstTriggerTicker.Buy.Float64()
-			if -buyPriceFluctuationRate > q.StopLossRate {
-				isKeep = false
-				unTriggerReason = "stop_loss"
+			if !imbalanceKeepRateCheckPass {
+				if -buyPriceFluctuationRate > q.OngoingStopLossRate {
+					isKeep = false
+					unTriggerReason = "stop_loss"
+				}
+			} else {
+				if -buyPriceFluctuationRate > q.OngoingStopLossRate*1.33 {
+					isKeep = false
+					unTriggerReason = "later_stop_loss"
+				}
 			}
 			highProfit := q.OngoingHighTicker.Sell.Float64() - q.FirstTriggerTicker.Sell.Float64()
 			highProfitRate := highProfit / q.FirstTriggerTicker.Sell.Float64()
-			if highProfit > 0 && highProfitRate > q.ProfitThresholdRate {
+			if highProfit > 0 && highProfitRate > q.OngoingProfitThresholdRate {
 				sellTakeProfitRate := (q.OngoingHighTicker.Sell.Float64() - bookTicker.Sell.Float64()) / highProfit
-				if sellTakeProfitRate > q.TakeProfitRate {
-					isKeep = false
-					unTriggerReason = "take_profit"
-					q.WinCount++
+				if !imbalanceKeepRateCheckPass {
+					if sellTakeProfitRate > q.TakeProfitRate*0.75 {
+						isKeep = false
+						unTriggerReason = "pre_take_profit"
+						q.WinCount++
+					}
+				} else {
+					if sellTakeProfitRate > q.TakeProfitRate {
+						isKeep = false
+						unTriggerReason = "take_profit"
+						q.WinCount++
+					}
 				}
 			}
 
 		}
 		if q.Action == ActionSell {
 			sellPriceFluctuationRate := (bookTicker.Sell.Float64() - q.FirstTriggerTicker.Sell.Float64()) / q.FirstTriggerTicker.Sell.Float64()
-			if sellPriceFluctuationRate > q.StopLossRate {
-				isKeep = false
-				unTriggerReason = "stop_loss"
+			if !imbalanceKeepRateCheckPass {
+				if sellPriceFluctuationRate > q.OngoingStopLossRate {
+					isKeep = false
+					unTriggerReason = "stop_loss"
+				}
+			} else {
+				if sellPriceFluctuationRate > q.OngoingStopLossRate*1.33 {
+					isKeep = false
+					unTriggerReason = "later_stop_loss"
+				}
 			}
 			highProfit := q.FirstTriggerTicker.Buy.Float64() - q.OngoingLowTicker.Buy.Float64()
 			highProfitRate := highProfit / q.FirstTriggerTicker.Buy.Float64()
-			if highProfit > 0 && highProfitRate > q.ProfitThresholdRate {
+			if highProfit > 0 && highProfitRate > q.OngoingProfitThresholdRate {
 				buyTakeProfitRate := (bookTicker.Buy.Float64() - q.OngoingLowTicker.Buy.Float64()) / highProfit
-				if buyTakeProfitRate > q.TakeProfitRate {
-					isKeep = false
-					unTriggerReason = "take_profit"
-					q.WinCount++
+				if !imbalanceKeepRateCheckPass {
+					if buyTakeProfitRate > q.TakeProfitRate*0.75 {
+						isKeep = false
+						unTriggerReason = "pre_take_profit"
+						q.WinCount++
+					}
+				} else {
+					if buyTakeProfitRate > q.TakeProfitRate {
+						isKeep = false
+						unTriggerReason = "take_profit"
+						q.WinCount++
+					}
 				}
 			}
 		}
@@ -252,10 +307,10 @@ func (q *QuoteQuantityExceedTrigger) BookTickerPush(bookTicker types.BookTicker)
 			}
 			q.TotalProfitRate += profitRate
 			q.WinRate = float64(q.WinCount) / float64(q.TotalTriggerCount)
-			if unTriggerReason == "stop_loss" && q.WinRate < 0.6 {
+			if (unTriggerReason == "stop_loss" || unTriggerReason == "later_stop_loss") && q.WinRate < 0.6 {
 				q.ScaleTriggerPrice()
 			}
-			q.Logger.Infof("[UnTrigger][%s][%s][%s][%s][TND:%s][KND:%s][%f][%f][PF:%f][TC:%d][WR:%f][TP:%f]ratio: %f, buy: %f, sell: %f, tick: %+v",
+			q.Logger.Infof("[UnTrigger][%s][%s][%s][%s][TND:%s][KND:%s][%f][%f][PF:%f][TC:%d][WR:%f][TP:%f][H:%+v][L:%+v]ratio: %f, buy: %f, sell: %f, tick: %+v",
 				q.Symbol,
 				q.Action,
 				unTriggerReason,
@@ -268,6 +323,8 @@ func (q *QuoteQuantityExceedTrigger) BookTickerPush(bookTicker types.BookTicker)
 				q.TotalTriggerCount,
 				q.WinRate,
 				q.TotalProfitRate,
+				q.OngoingHighTicker,
+				q.OngoingLowTicker,
 				keepRatio,
 				keepBuyNearQuoteQuantityRate,
 				keepSellNearQuoteQuantityRate,
@@ -304,14 +361,29 @@ func (q *QuoteQuantityExceedTrigger) BookTickerPush(bookTicker types.BookTicker)
 		if imbalanceTriggerRate > q.ImbalanceThresholdTriggerRate {
 			imbalanceTriggerRateCheckPass = true
 		}
+		var tickerImbalanceTriggerRate float64
+		tickerImbalanceDirection := ""
+		if bookTicker.BuySize > bookTicker.SellSize {
+			tickerImbalanceDirection = "sell"
+			tickerImbalanceTriggerRate = bookTicker.SellSize.Float64() / bookTicker.BuySize.Float64()
+		} else {
+			tickerImbalanceDirection = "buy"
+			tickerImbalanceTriggerRate = bookTicker.BuySize.Float64() / bookTicker.SellSize.Float64()
+		}
+		tickerCheckPass := false
+		if tickerImbalanceDirection == q.Action && tickerImbalanceTriggerRate > q.ImbalanceThresholdTriggerRate/2 {
+			tickerCheckPass = true
+		}
 		if triggerRatio > q.AdaptTriggerNearQuoteQuantityRateRatio &&
 			isPriceFluctuationTriggerCheckPass &&
-			imbalanceTriggerRateCheckPass {
+			imbalanceTriggerRateCheckPass &&
+			tickerCheckPass {
 			q.Trigger(bookTicker)
 			q.RecordTicker(bookTicker)
 			q.Logger.Infof("[Trigger][%s][%s][TND:%s][KND:%s][%f][%f][IB:%f][NFT:%f,%f][FFT:%f,%f]ratio: %f, buy: %f, sell: %f, tick: %+v",
 				q.Symbol,
 				q.Action,
+				//isReverse,
 				q.TriggerNearDuration,
 				q.KeepNearDuration,
 				q.AdaptTriggerNearQuoteQuantityRateRatio,
@@ -359,7 +431,7 @@ func (q *QuoteQuantityExceedTrigger) GetTriggerNearWindow(bookTicker types.BookT
 
 func (q *QuoteQuantityExceedTrigger) ScaleImbalanceThresholdTriggerRate() {
 	if q.ImbalanceThresholdTriggerRate > q.MaxImbalanceThresholdTriggerRate && q.ImbalanceThresholdTriggerRate < q.MinImbalanceThresholdTriggerRate {
-		largerImbalanceThresholdTriggerRate := q.ImbalanceThresholdTriggerRate * 2
+		largerImbalanceThresholdTriggerRate := q.ImbalanceThresholdTriggerRate * 1.2
 		if largerImbalanceThresholdTriggerRate < q.MaxImbalanceThresholdTriggerRate {
 			q.ImbalanceThresholdTriggerRate = largerImbalanceThresholdTriggerRate
 		} else {
@@ -370,7 +442,7 @@ func (q *QuoteQuantityExceedTrigger) ScaleImbalanceThresholdTriggerRate() {
 
 func (q *QuoteQuantityExceedTrigger) ReduceImbalanceThresholdTriggerRate() {
 	if q.ImbalanceThresholdTriggerRate < q.MaxImbalanceThresholdTriggerRate && q.ImbalanceThresholdTriggerRate > q.MinImbalanceThresholdTriggerRate {
-		smallerImbalanceThresholdTriggerRate := q.ImbalanceThresholdTriggerRate * 0.7
+		smallerImbalanceThresholdTriggerRate := q.ImbalanceThresholdTriggerRate * 0.5
 		if smallerImbalanceThresholdTriggerRate > q.MinImbalanceThresholdTriggerRate {
 			q.ImbalanceThresholdTriggerRate = smallerImbalanceThresholdTriggerRate
 		} else {
@@ -380,14 +452,51 @@ func (q *QuoteQuantityExceedTrigger) ReduceImbalanceThresholdTriggerRate() {
 }
 
 func (q *QuoteQuantityExceedTrigger) ReduceOngoingProfitThresholdRate() {
-	if q.OngoingProfitThresholdRate < q.MaxProfitThresholdRate && q.OngoingProfitThresholdRate > q.MinProfitThresholdRate {
-		smallerProfitThresholdRate := q.OngoingProfitThresholdRate * 9 / 10
-		if smallerProfitThresholdRate > q.MinProfitThresholdRate {
-			q.OngoingProfitThresholdRate = smallerProfitThresholdRate
-		} else {
-			q.OngoingProfitThresholdRate = q.MinProfitThresholdRate
-		}
-	}
+	//if q.OngoingProfitThresholdRate < q.MaxProfitThresholdRate && q.OngoingProfitThresholdRate > q.MinProfitThresholdRate {
+	//	smallerProfitThresholdRate := q.OngoingProfitThresholdRate * 9 / 10
+	//	if smallerProfitThresholdRate > q.MinProfitThresholdRate {
+	//		q.OngoingProfitThresholdRate = smallerProfitThresholdRate
+	//	} else {
+	//		q.OngoingProfitThresholdRate = q.MinProfitThresholdRate
+	//	}
+	//}
+	q.OngoingProfitThresholdRate = q.OngoingProfitThresholdRate * 9 / 10
+}
+
+func (q *QuoteQuantityExceedTrigger) ScaleOngoingProfitThresholdRate() {
+	//if q.OngoingProfitThresholdRate > q.MaxProfitThresholdRate && q.OngoingProfitThresholdRate < q.MinProfitThresholdRate {
+	//	largerProfitThresholdRate := q.OngoingProfitThresholdRate * 5 / 4
+	//	if largerProfitThresholdRate < q.MaxProfitThresholdRate {
+	//		q.OngoingProfitThresholdRate = largerProfitThresholdRate
+	//	} else {
+	//		q.OngoingProfitThresholdRate = q.MaxProfitThresholdRate
+	//	}
+	//}
+	q.OngoingProfitThresholdRate = q.OngoingProfitThresholdRate * 5 / 4
+}
+
+func (q *QuoteQuantityExceedTrigger) ReduceOngoingStopLossRate() {
+	//if q.OngoingStopLossRate < q.MaxStopLossRate && q.OngoingStopLossRate > q.MinStopLossRate {
+	//	smallerStopLossRate := q.OngoingStopLossRate * 9 / 10
+	//	if smallerStopLossRate > q.MinStopLossRate {
+	//		q.OngoingStopLossRate = smallerStopLossRate
+	//	} else {
+	//		q.OngoingStopLossRate = q.MinStopLossRate
+	//	}
+	//}
+	q.OngoingStopLossRate = q.OngoingStopLossRate * 9 / 10
+}
+
+func (q *QuoteQuantityExceedTrigger) ScaleOngoingStopLossRate() {
+	//if q.OngoingStopLossRate > q.MaxStopLossRate && q.OngoingStopLossRate < q.MinStopLossRate {
+	//	largerStopLossRate := q.OngoingStopLossRate * 5 / 4
+	//	if largerStopLossRate < q.MaxStopLossRate {
+	//		q.OngoingStopLossRate = largerStopLossRate
+	//	} else {
+	//		q.OngoingStopLossRate = q.MaxStopLossRate
+	//	}
+	//}
+	q.OngoingStopLossRate = q.OngoingStopLossRate * 5 / 4
 }
 
 func (q *QuoteQuantityExceedTrigger) ScaleTriggerPrice() {
