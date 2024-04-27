@@ -365,13 +365,17 @@ func (q *QuoteQuantityExceedTrigger) BookTickerPush(bookTicker types.BookTicker)
 		tickerImbalanceDirection := ""
 		if bookTicker.BuySize > bookTicker.SellSize {
 			tickerImbalanceDirection = "sell"
-			tickerImbalanceTriggerRate = bookTicker.SellSize.Float64() / bookTicker.BuySize.Float64()
+			tickerImbalanceTriggerRate = bookTicker.BuySize.Float64() / bookTicker.SellSize.Float64()
 		} else {
 			tickerImbalanceDirection = "buy"
-			tickerImbalanceTriggerRate = bookTicker.BuySize.Float64() / bookTicker.SellSize.Float64()
+			tickerImbalanceTriggerRate = bookTicker.SellSize.Float64() / bookTicker.BuySize.Float64()
 		}
 		tickerCheckPass := false
-		if tickerImbalanceDirection == q.Action && tickerImbalanceTriggerRate > q.ImbalanceThresholdTriggerRate/2 {
+		tickImbalanceThresholdTriggerRate := q.ImbalanceThresholdTriggerRate / 2
+		if tickImbalanceThresholdTriggerRate > 5 {
+			tickImbalanceThresholdTriggerRate = 5
+		}
+		if tickerImbalanceDirection == q.Action && tickerImbalanceTriggerRate > tickImbalanceThresholdTriggerRate {
 			tickerCheckPass = true
 		}
 		if triggerRatio > q.AdaptTriggerNearQuoteQuantityRateRatio &&
