@@ -179,7 +179,7 @@ func (s *Strategy) InitFeeRates(ctx context.Context, session *bbgo.ExchangeSessi
 func (s *Strategy) InitTickKline(session *bbgo.ExchangeSession) error {
 	s.TickKline = make(map[string]*tick.Kline)
 	for _, symbol := range s.Symbols {
-		tickKline, err := tick.NewKline(2, s.InfluxDB, symbol, session.Exchange.Name())
+		tickKline, err := tick.NewKline(1, s.InfluxDB, symbol, session.Exchange.Name())
 		if err != nil {
 			return errors.Wrapf(err, "failed to create tick kline for symbol: %s,", symbol)
 		}
@@ -192,7 +192,7 @@ func (s *Strategy) InitTickKline(session *bbgo.ExchangeSession) error {
 func (s *Strategy) InitAggKline(session *bbgo.ExchangeSession) error {
 	s.AggKline = make(map[string]*aggtrade.Kline)
 	for _, symbol := range s.Symbols {
-		aggKline, err := aggtrade.NewKline(2, s.InfluxDB, symbol, session.Exchange.Name())
+		aggKline, err := aggtrade.NewKline(1, s.InfluxDB, symbol, session.Exchange.Name())
 		if err != nil {
 			return errors.Wrapf(err, "failed to create aggtrade kline for symbol: %s,", symbol)
 		}

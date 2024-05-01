@@ -6,6 +6,7 @@ import (
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/tick/influxpersist"
 	"github.com/c9s/bbgo/pkg/types"
 	"math"
+	"sort"
 	"time"
 )
 
@@ -96,7 +97,7 @@ func (s *Second) GetFirstAndEnd(from time.Time, to time.Time) (start, end *types
 		return nil, nil, false, false
 	}
 	if s.StartTime.After(from) {
-		start = s.Ticks[0]
+		start = s.Open
 	} else {
 		for _, tick := range s.Ticks {
 			if tick.TransactionTime.After(from) {
@@ -107,16 +108,17 @@ func (s *Second) GetFirstAndEnd(from time.Time, to time.Time) (start, end *types
 		}
 	}
 	if s.EndTime.Before(to) {
-		end = s.Ticks[len(s.Ticks)-1]
+		end = s.Close
 	} else {
 		for i := len(s.Ticks) - 1; i >= 0; i-- {
 			if s.Ticks[i].Time.Before(to) {
 				end = s.Ticks[i]
+				isRealEnd = true
 				break
 			}
 		}
 	}
-	return start, end
+	return start, end, isRealStart, isRealEnd
 }
 
 func (s *Second) RemoveBefore(t time.Time) (allRemove bool) {
@@ -157,6 +159,49 @@ func NewMinute(previous *Minute) *Minute {
 		WindowBase: NewWindowBase(),
 		Previous:   previous,
 	}
+}
+
+func (m *Minute) GetFirstAndEnd(from time.Time, to time.Time) (start, end *types.BookTicker, isRealStart, isRealEnd bool) {
+	if m == nil {
+		return nil, nil, false, false
+	}
+	if m.StartTime.After(to) {
+		return nil, nil, false, false
+	}
+	if m.EndTime.Before(from) {
+		return nil, nil, false, false
+	}
+	if m.StartTime.After(from) {
+		start = m.Open
+	} else {
+		for _, second := range m.Seconds {
+			if second == nil {
+				continue
+			}
+			secStart, _, secIsRealStart, _ := second.GetFirstAndEnd(from, to)
+			if secStart != nil && secIsRealStart {
+				start = secStart
+				isRealStart = true
+				break
+			}
+		}
+	}
+	if m.EndTime.Before(to) {
+		end = m.Close
+	} else {
+		for i := 59; i >= 0; i-- {
+			if m.Seconds[i] == nil {
+				continue
+			}
+			_, secEnd, _, secIsRealEnd := m.Seconds[i].GetFirstAndEnd(from, to)
+			if secEnd != nil && secIsRealEnd {
+				end = secEnd
+				isRealEnd = true
+				break
+			}
+		}
+	}
+	return start, end, isRealStart, isRealEnd
 }
 
 func (m *Minute) RemoveBefore(t time.Time) (allRemove bool) {
@@ -244,6 +289,49 @@ func NewHour(previous *Hour) *Hour {
 	}
 }
 
+func (h *Hour) GetFirstAndEnd(from time.Time, to time.Time) (start, end *types.BookTicker, isRealStart, isRealEnd bool) {
+	if h == nil {
+		return nil, nil, false, false
+	}
+	if h.StartTime.After(to) {
+		return nil, nil, false, false
+	}
+	if h.EndTime.Before(from) {
+		return nil, nil, false, false
+	}
+	if h.StartTime.After(from) {
+		start = h.Open
+	} else {
+		for _, minute := range h.Minutes {
+			if minute == nil {
+				continue
+			}
+			minStart, _, minIsRealStart, _ := minute.GetFirstAndEnd(from, to)
+			if minStart != nil && minIsRealStart {
+				start = minStart
+				isRealStart = true
+				break
+			}
+		}
+	}
+	if h.EndTime.Before(to) {
+		end = h.Close
+	} else {
+		for i := 59; i >= 0; i-- {
+			if h.Minutes[i] == nil {
+				continue
+			}
+			_, minEnd, _, minIsRealEnd := h.Minutes[i].GetFirstAndEnd(from, to)
+			if minEnd != nil && minIsRealEnd {
+				end = minEnd
+				isRealEnd = true
+				break
+			}
+		}
+	}
+	return start, end, isRealStart, isRealEnd
+}
+
 func (h *Hour) RemoveBefore(t time.Time) (allRemove bool) {
 	if h == nil {
 		return false
@@ -320,6 +408,49 @@ func NewDay(previous *Day) *Day {
 		WindowBase: NewWindowBase(),
 		Previous:   previous,
 	}
+}
+
+func (d *Day) GetFirstAndEnd(from time.Time, to time.Time) (start, end *types.BookTicker, isRealStart, isRealEnd bool) {
+	if d == nil {
+		return nil, nil, false, false
+	}
+	if d.StartTime.After(to) {
+		return nil, nil, false, false
+	}
+	if d.EndTime.Before(from) {
+		return nil, nil, false, false
+	}
+	if d.StartTime.After(from) {
+		start = d.Open
+	} else {
+		for _, hour := range d.Hours {
+			if hour == nil {
+				continue
+			}
+			hourStart, _, hourIsRealStart, _ := hour.GetFirstAndEnd(from, to)
+			if hourStart != nil && hourIsRealStart {
+				start = hourStart
+				isRealStart = true
+				break
+			}
+		}
+	}
+	if d.EndTime.Before(to) {
+		end = d.Close
+	} else {
+		for i := 23; i >= 0; i-- {
+			if d.Hours[i] == nil {
+				continue
+			}
+			_, hourEnd, _, hourIsRealEnd := d.Hours[i].GetFirstAndEnd(from, to)
+			if hourEnd != nil && hourIsRealEnd {
+				end = hourEnd
+				isRealEnd = true
+				break
+			}
+		}
+	}
+	return start, end, isRealStart, isRealEnd
 }
 
 func (d *Day) RemoveBefore(t time.Time) (allRemove bool) {
@@ -466,7 +597,57 @@ func (k *Kline) GetPersist(from time.Time, to time.Time) ([]*types.BookTicker, *
 }
 
 func (k *Kline) GetFirstAndEnd(from time.Time, to time.Time) (start, end *types.BookTicker) {
-
+	if k == nil {
+		return nil, nil
+	}
+	if k.StartTime.After(to) {
+		return nil, nil
+	}
+	if k.EndTime.Before(from) {
+		return nil, nil
+	}
+	sortedDays := make([]time.Time, 0, len(k.Days))
+	for date := range k.Days {
+		day, err := time.Parse("2006-01-02", date)
+		if err != nil {
+			continue
+		}
+		sortedDays = append(sortedDays, day)
+	}
+	sort.Slice(sortedDays, func(i, j int) bool {
+		return sortedDays[i].Before(sortedDays[j])
+	})
+	if k.StartTime.After(from) {
+		key := sortedDays[0].Format("2006-01-02")
+		start = k.Days[key].Open
+	} else {
+		for _, day := range sortedDays {
+			if day.Before(from) {
+				continue
+			}
+			dayStart, _, dayIsRealStart, _ := k.Days[day.Format("2006-01-02")].GetFirstAndEnd(from, to)
+			if dayStart != nil && dayIsRealStart {
+				start = dayStart
+				break
+			}
+		}
+	}
+	if k.EndTime.Before(to) {
+		key := sortedDays[len(sortedDays)-1].Format("2006-01-02")
+		end = k.Days[key].Close
+	} else {
+		for i := len(sortedDays) - 1; i >= 0; i-- {
+			if sortedDays[i].After(to) {
+				continue
+			}
+			dayEnd, _, _, dayIsRealEnd := k.Days[sortedDays[i].Format("2006-01-02")].GetFirstAndEnd(from, to)
+			if dayEnd != nil && dayIsRealEnd {
+				end = dayEnd
+				break
+			}
+		}
+	}
+	return start, end
 }
 
 func (k *Kline) Get(from time.Time, to time.Time) ([]*types.BookTicker, *WindowBase) {
