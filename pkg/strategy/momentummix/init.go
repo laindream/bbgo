@@ -7,7 +7,8 @@ import (
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/history"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/aggtrade"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/tick"
-	"github.com/c9s/bbgo/pkg/strategy/momentummix/trigger"
+	"github.com/c9s/bbgo/pkg/strategy/momentummix/trigger/set"
+	"github.com/c9s/bbgo/pkg/strategy/momentummix/trigger/trigger"
 	"github.com/c9s/bbgo/pkg/types"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -62,41 +63,42 @@ func (s *Strategy) InitQuoteQuantityExceedTrigger() {
 		trig := &trigger.QuoteQuantityExceedTrigger{
 			Symbol:                                 symbol,
 			AdaptTriggerNearQuoteQuantityRateRatio: 5,
-			AdaptKeepNearQuoteQuantityRateRatio:    5,
+			AdaptKeepNearQuoteQuantityRateRatio:    3,
 			FirstTriggerTime:                       nil,
 			FinalTriggerTime:                       nil,
 			LastTriggerTime:                        nil,
-			Capture:                                s.Captures[symbol],
-			History:                                s.HistoryMarketStats[symbol],
-			AggKline:                               s.AggKline[symbol],
-			TickKline:                              s.TickKline[symbol],
-			MinTriggerWindowTradeCount:             15,
-			MaxTriggerWindowTradeCount:             75,
-			MinKeepWindowTradeCount:                20,
-			MaxKeepWindowTradeCount:                100,
-			MinTriggerNearDuration:                 250 * time.Millisecond,
-			TriggerNearDuration:                    500 * time.Millisecond,
-			MaxTriggerNearDuration:                 8000 * time.Millisecond,
-			MinKeepNearDuration:                    1000 * time.Millisecond,
-			KeepNearDuration:                       1000 * time.Millisecond,
-			MaxKeepNearDuration:                    5000 * time.Millisecond,
-			MinKeepDuration:                        10000 * time.Millisecond,
-			MaxKeepDuration:                        100000 * time.Millisecond,
-			MinTriggerInterval:                     20 * time.Minute,
-			MaxTriggerInterval:                     60 * time.Minute,
-			OnTrigger:                              func(book types.BookTicker) {},
-			OnUnTrigger:                            func(book types.BookTicker) {},
-			OnKeepTrigger:                          func(book types.BookTicker) {},
-			Logger:                                 log,
+			//Capture:                                s.Captures[symbol],
+			Fee:                        s.FeeRates[symbol],
+			History:                    s.HistoryMarketStats[symbol],
+			AggKline:                   s.AggKline[symbol],
+			TickKline:                  s.TickKline[symbol],
+			MinTriggerWindowTradeCount: 15,
+			MaxTriggerWindowTradeCount: 75,
+			MinKeepWindowTradeCount:    20,
+			MaxKeepWindowTradeCount:    100,
+			MinTriggerNearDuration:     250 * time.Millisecond,
+			TriggerNearDuration:        500 * time.Millisecond,
+			MaxTriggerNearDuration:     8000 * time.Millisecond,
+			MinKeepNearDuration:        1000 * time.Millisecond,
+			KeepNearDuration:           1000 * time.Millisecond,
+			MaxKeepNearDuration:        5000 * time.Millisecond,
+			MinKeepDuration:            10000 * time.Millisecond,
+			MaxKeepDuration:            100000 * time.Millisecond,
+			MinTriggerInterval:         20 * time.Minute,
+			MaxTriggerInterval:         60 * time.Minute,
+			//OnTrigger:                  func(book types.BookTicker) {},
+			//OnUnTrigger:                func(book types.BookTicker) {},
+			//OnKeepTrigger:              func(book types.BookTicker) {},
+			Logger: log,
 
 			MinImbalanceThresholdKeepRate:    1.5,
 			MaxImbalanceThresholdKeepRate:    750,
 			MinImbalanceThresholdTriggerRate: 2.0,
 			ImbalanceThresholdTriggerRate:    6.0,
 			MaxImbalanceThresholdTriggerRate: 1000.0,
-			MinStopLossRate:                  0.003,
-			StopLossRate:                     0.003,
-			MaxStopLossRate:                  0.024,
+			MinStopLossRate:                  0.0035,
+			StopLossRate:                     0.0035,
+			MaxStopLossRate:                  0.028,
 			MinNearPriceFluctuationRate:      0.0016,
 			NearPriceFluctuationRate:         0.0016,
 			MaxNearPriceFluctuationRate:      0.0128,
@@ -105,14 +107,26 @@ func (s *Strategy) InitQuoteQuantityExceedTrigger() {
 			FarPriceFluctuationRate:          0.0025,
 			MaxFarPriceFluctuationRate:       0.020,
 			FarPriceFluctuationDuration:      30 * time.Second,
-			TakeProfitRate:                   0.25,
-			MinProfitThresholdRate:           0.005,
-			ProfitThresholdRate:              0.005,
-			MaxProfitThresholdRate:           0.040,
-
+			TakeProfitRate:                   0.3,
+			MinProfitThresholdRate:           0.006,
+			ProfitThresholdRate:              0.006,
+			MaxProfitThresholdRate:           0.048,
 			//ReverseImbalanceThresholdTriggerRate: 0.5,
 		}
+		trig.OnTrigger = func(book types.BookTicker, profit float64) {
+			s.TriggerSet.OnTrigger(book)
+		}
+		trig.OnUnTrigger = func(book types.BookTicker, profit float64) {
+			s.TriggerSet.OnUnTrigger(book, profit)
+		}
+		trig.OnKeepTrigger = func(book types.BookTicker, profit float64) {
+		}
 		s.QuoteQuantityExceedTriggers[symbol] = trig
+	}
+	s.TriggerSet = &set.TriggerSet{
+		QuoteQuantityExceedTriggers: s.QuoteQuantityExceedTriggers,
+		TotalValueRank:              []string{},
+		Logger:                      log,
 	}
 }
 
@@ -165,7 +179,7 @@ func (s *Strategy) InitFeeRates(ctx context.Context, session *bbgo.ExchangeSessi
 func (s *Strategy) InitTickKline(session *bbgo.ExchangeSession) error {
 	s.TickKline = make(map[string]*tick.Kline)
 	for _, symbol := range s.Symbols {
-		tickKline, err := tick.NewKline(3, s.InfluxDB, symbol, session.Exchange.Name())
+		tickKline, err := tick.NewKline(2, s.InfluxDB, symbol, session.Exchange.Name())
 		if err != nil {
 			return errors.Wrapf(err, "failed to create tick kline for symbol: %s,", symbol)
 		}
@@ -178,7 +192,7 @@ func (s *Strategy) InitTickKline(session *bbgo.ExchangeSession) error {
 func (s *Strategy) InitAggKline(session *bbgo.ExchangeSession) error {
 	s.AggKline = make(map[string]*aggtrade.Kline)
 	for _, symbol := range s.Symbols {
-		aggKline, err := aggtrade.NewKline(3, s.InfluxDB, symbol, session.Exchange.Name())
+		aggKline, err := aggtrade.NewKline(2, s.InfluxDB, symbol, session.Exchange.Name())
 		if err != nil {
 			return errors.Wrapf(err, "failed to create aggtrade kline for symbol: %s,", symbol)
 		}

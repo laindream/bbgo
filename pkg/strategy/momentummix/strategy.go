@@ -11,9 +11,9 @@ import (
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/history"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/aggtrade"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/tick"
-	"github.com/c9s/bbgo/pkg/strategy/momentummix/trigger"
+	"github.com/c9s/bbgo/pkg/strategy/momentummix/trigger/set"
+	"github.com/c9s/bbgo/pkg/strategy/momentummix/trigger/trigger"
 	"github.com/c9s/bbgo/pkg/types"
-	"math"
 	"sort"
 	"time"
 )
@@ -47,6 +47,7 @@ type Strategy struct {
 	StartTime       time.Time
 
 	QuoteQuantityExceedTriggers map[string]*trigger.QuoteQuantityExceedTrigger
+	TriggerSet                  *set.TriggerSet
 }
 
 func (s *Strategy) ID() string {
@@ -90,86 +91,17 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 	session.MarketDataStream.OnKLine(func(kline types.KLine) {
 		//printData(kline)
 	})
-	maxAllRatio := 0.0
-	maxBuyRatio := 0.0
-	maxSellRatio := 0.0
-	minAllRatio := math.Inf(1)
-	minBuyRatio := math.Inf(1)
-	minSellRatio := math.Inf(1)
-	maxBuySellRatio := 0.0
-	maxSellBuyRatio := 0.0
-	var isTickKlinePrintMap = make(map[string]bool)
 
 	session.MarketDataStream.OnBookTickerUpdate(func(bookTicker types.BookTicker) {
 		s.TickKline[bookTicker.Symbol].AppendTick(&bookTicker)
-		nearDuration := 1000 * time.Millisecond
-		s.Captures[bookTicker.Symbol].PushNearDeepQuantityRateRatioWindowItem(120*time.Second, nearDuration)
+		//nearDuration := 1000 * time.Millisecond
+		//s.Captures[bookTicker.Symbol].PushNearDeepQuantityRateRatioWindowItem(120*time.Second, nearDuration)
 		//s.Captures[bookTicker.Symbol].PushNearQuantityRateWindowItem()
 		if time.Now().Sub(s.StartTime) < time.Minute {
 			return
 		}
+		s.TriggerSet.OnUpdateRank()
 		s.QuoteQuantityExceedTriggers[bookTicker.Symbol].BookTickerPush(bookTicker)
-		return
-		from := bookTicker.TransactionTime.Add(-nearDuration)
-		to := bookTicker.TransactionTime
-		allRatio := s.Captures[bookTicker.Symbol].NearDeepQuantityRateRatioWindow.All.GetStatistic(from, to).GetCountAvg()
-		buyRatio := s.Captures[bookTicker.Symbol].NearDeepQuantityRateRatioWindow.Buy.GetStatistic(from, to).GetCountAvg()
-		sellRatio := s.Captures[bookTicker.Symbol].NearDeepQuantityRateRatioWindow.Sell.GetStatistic(from, to).GetCountAvg()
-		buySellRatio := buyRatio / sellRatio
-		sellBuyRatio := sellRatio / buyRatio
-		if allRatio > maxAllRatio {
-			maxAllRatio = allRatio
-			log.Infof("[maxAllRatio] %s: %f, %+v", bookTicker.Symbol, maxAllRatio, bookTicker)
-		}
-		if buyRatio > maxBuyRatio {
-			maxBuyRatio = buyRatio
-			log.Infof("[maxBuyRatio] %s: %f, %+v", bookTicker.Symbol, buyRatio, bookTicker)
-		}
-		if sellRatio > maxSellRatio {
-			maxSellRatio = sellRatio
-			log.Infof("[maxSellRatio] %s: %f, %+v", bookTicker.Symbol, sellRatio, bookTicker)
-		}
-		//if allRatio < minAllRatio {
-		//	minAllRatio = allRatio
-		//	log.Infof("[minAllRatio] %s: %f", bookTicker.Symbol, allRatio)
-		//}
-		//if buyRatio < minBuyRatio {
-		//	minBuyRatio = buyRatio
-		//	log.Infof("[minBuyRatio] %s: %f", bookTicker.Symbol, buyRatio)
-		//}
-		//if sellRatio < minSellRatio {
-		//	minSellRatio = sellRatio
-		//	log.Infof("[minSellRatio] %s: %f", bookTicker.Symbol, sellRatio)
-		//}
-		if buySellRatio > maxBuySellRatio {
-			maxBuySellRatio = buySellRatio
-			log.Infof("[maxBuySellRatio] %s: %f, %+v", bookTicker.Symbol, buySellRatio, bookTicker)
-		}
-		if sellBuyRatio > maxSellBuyRatio {
-			maxSellBuyRatio = sellBuyRatio
-			log.Infof("[maxSellBuyRatio] %s: %f, %+v", bookTicker.Symbol, sellBuyRatio, bookTicker)
-		}
-		printKey := fmt.Sprintf("%s-%s", bookTicker.Symbol, bookTicker.TransactionTime.Format("2006-01-02 15:04"))
-		if !isTickKlinePrintMap[printKey] {
-			stat := s.HistoryMarketStats[bookTicker.Symbol].GetStat()
-			log.Infof("[stat] %s: %+v", bookTicker.Symbol, stat)
-			isTickKlinePrintMap[printKey] = true
-			log.Infof("[maxAllRatio] %s: %f", bookTicker.Symbol, maxAllRatio)
-			log.Infof("[maxBuyRatio] %s: %f", bookTicker.Symbol, maxBuyRatio)
-			log.Infof("[maxSellRatio] %s: %f", bookTicker.Symbol, maxSellRatio)
-			log.Infof("[minAllRatio] %s: %f", bookTicker.Symbol, minAllRatio)
-			log.Infof("[minBuyRatio] %s: %f", bookTicker.Symbol, minBuyRatio)
-			log.Infof("[minSellRatio] %s: %f", bookTicker.Symbol, minSellRatio)
-			log.Infof("[maxBuySellRatio] %s: %f", bookTicker.Symbol, maxBuySellRatio)
-			log.Infof("[maxSellBuyRatio] %s: %f", bookTicker.Symbol, maxSellBuyRatio)
-			log.Infof("[allRatio] %s: %f", bookTicker.Symbol, allRatio)
-			log.Infof("[buyRatio] %s: %f", bookTicker.Symbol, buyRatio)
-			log.Infof("[sellRatio] %s: %f", bookTicker.Symbol, sellRatio)
-			log.Infof("[buySellRatio] %s: %f", bookTicker.Symbol, buySellRatio)
-			log.Infof("[sellBuyRatio] %s: %f", bookTicker.Symbol, sellBuyRatio)
-		}
-		//s.PrintBookTicker(bookTicker)
-		//s.printData(session, bookTicker)
 	})
 	session.MarketDataStream.OnAggTrade(func(trade types.Trade) {
 		s.AggKline[trade.Symbol].AppendTrade(&trade)

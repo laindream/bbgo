@@ -85,6 +85,40 @@ func NewSecond(previous *Second) *Second {
 	}
 }
 
+func (s *Second) GetFirstAndEnd(from time.Time, to time.Time) (start, end *types.BookTicker, isRealStart, isRealEnd bool) {
+	if s == nil {
+		return nil, nil, false, false
+	}
+	if s.StartTime.After(to) {
+		return nil, nil, false, false
+	}
+	if s.EndTime.Before(from) {
+		return nil, nil, false, false
+	}
+	if s.StartTime.After(from) {
+		start = s.Ticks[0]
+	} else {
+		for _, tick := range s.Ticks {
+			if tick.TransactionTime.After(from) {
+				start = tick
+				isRealStart = true
+				break
+			}
+		}
+	}
+	if s.EndTime.Before(to) {
+		end = s.Ticks[len(s.Ticks)-1]
+	} else {
+		for i := len(s.Ticks) - 1; i >= 0; i-- {
+			if s.Ticks[i].Time.Before(to) {
+				end = s.Ticks[i]
+				break
+			}
+		}
+	}
+	return start, end
+}
+
 func (s *Second) RemoveBefore(t time.Time) (allRemove bool) {
 	if s == nil {
 		return false
@@ -432,63 +466,7 @@ func (k *Kline) GetPersist(from time.Time, to time.Time) ([]*types.BookTicker, *
 }
 
 func (k *Kline) GetFirstAndEnd(from time.Time, to time.Time) (start, end *types.BookTicker) {
-	for _, day := range k.Days {
-		if day.StartTime.After(to) {
-			continue
-		}
-		if day.EndTime.Before(from) {
-			continue
-		}
 
-		for _, hour := range day.Hours {
-			if hour == nil {
-				continue
-			}
-			if hour.StartTime.After(to) {
-				continue
-			}
-			if hour.EndTime.Before(from) {
-				continue
-			}
-
-			for _, minute := range hour.Minutes {
-				if minute == nil {
-					continue
-				}
-				if minute.StartTime.After(to) {
-					continue
-				}
-				if minute.EndTime.Before(from) {
-					continue
-				}
-
-				for _, second := range minute.Seconds {
-					if second == nil {
-						continue
-					}
-					if second.StartTime.After(to) {
-						continue
-					}
-					if second.EndTime.Before(from) {
-						continue
-					}
-					for _, tick := range second.Ticks {
-						if tick.Time.After(to) {
-							continue
-						}
-						if tick.Time.Before(from) {
-							continue
-						}
-						if start == nil {
-							start = tick
-						}
-						end = tick
-					}
-				}
-			}
-		}
-	}
-	return start, end
 }
 
 func (k *Kline) Get(from time.Time, to time.Time) ([]*types.BookTicker, *WindowBase) {
