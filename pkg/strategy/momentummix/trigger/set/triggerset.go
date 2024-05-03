@@ -42,7 +42,7 @@ func (s *TriggerSet) OnUpdateRank() {
 	}
 }
 
-func (s *TriggerSet) OnTrigger(book types.BookTicker) {
+func (s *TriggerSet) OnTrigger(book *types.BookTicker) {
 	topK := len(s.TotalValueRank) * 6 / 10
 	if topK == 0 {
 		return
@@ -56,7 +56,7 @@ func (s *TriggerSet) OnTrigger(book types.BookTicker) {
 	}
 }
 
-func (s *TriggerSet) OnUnTrigger(book types.BookTicker, profit float64) {
+func (s *TriggerSet) OnUnTrigger(book *types.BookTicker, profit float64) {
 	if t, ok := s.QuoteQuantityExceedTriggers[book.Symbol]; ok && t.IsGlobalTriggered {
 		if profit > 0 {
 			s.WinCount++

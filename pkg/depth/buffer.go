@@ -165,9 +165,9 @@ func (b *Buffer) getLastBuffLastUpdateID() int64 {
 		return 0
 	}
 	if b.isFutures {
-		lastUpdateID = b.buffer[len(b.buffer)-1].PreviousFinalUpdateID
+		lastUpdateID = b.buffer[len(b.buffer)-1].FinalUpdateID
 	} else {
-		lastUpdateID = b.buffer[len(b.buffer)-1].FirstUpdateID - 1
+		lastUpdateID = b.buffer[len(b.buffer)-1].FinalUpdateID
 	}
 	b.mu.Unlock()
 	return lastUpdateID
@@ -190,14 +190,14 @@ func (b *Buffer) fetchAndPush() error {
 	if len(b.buffer) > 0 {
 		// the snapshot is too early
 		if b.isFutures {
-			if finalUpdateID < b.buffer[0].PreviousFinalUpdateID {
+			if finalUpdateID < b.buffer[0].FirstUpdateID {
 				b.resetSnapshot()
 				b.emitReset()
 				b.mu.Unlock()
 				return fmt.Errorf("depth snapshot is too early, final update %d is < the first update id %d", finalUpdateID, b.buffer[0].FirstUpdateID)
 			}
 		} else {
-			if finalUpdateID < b.buffer[0].FirstUpdateID-1 {
+			if finalUpdateID < b.buffer[0].FirstUpdateID {
 				b.resetSnapshot()
 				b.emitReset()
 				b.mu.Unlock()
@@ -208,17 +208,32 @@ func (b *Buffer) fetchAndPush() error {
 
 	var pushUpdates []Update
 	if b.isFutures {
-		for _, u := range b.buffer {
-			// skip old events
-			if u.PreviousFinalUpdateID < finalUpdateID {
-				continue
-			}
 
-			if u.PreviousFinalUpdateID > finalUpdateID {
-				b.resetSnapshot()
-				b.emitReset()
-				b.mu.Unlock()
-				return fmt.Errorf("there is a missing depth update, the previous update id %d > final update id %d", u.PreviousFinalUpdateID, finalUpdateID)
+		isGotFistBuffer := false
+		for _, u := range b.buffer {
+			if !isGotFistBuffer {
+				if u.FinalUpdateID < finalUpdateID {
+					continue
+				}
+				if u.FirstUpdateID > finalUpdateID {
+					b.resetSnapshot()
+					b.emitReset()
+					b.mu.Unlock()
+					return fmt.Errorf("there is an abnormal depth update, the first update id %d < final update id %d", u.FirstUpdateID, finalUpdateID)
+				}
+				isGotFistBuffer = true
+			} else {
+				// skip old events
+				if u.PreviousFinalUpdateID < finalUpdateID {
+					continue
+				}
+
+				if u.PreviousFinalUpdateID > finalUpdateID {
+					b.resetSnapshot()
+					b.emitReset()
+					b.mu.Unlock()
+					return fmt.Errorf("there is a missing depth update, the previous update id %d > final update id %d", u.PreviousFinalUpdateID, finalUpdateID)
+				}
 			}
 
 			pushUpdates = append(pushUpdates, u)

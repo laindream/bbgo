@@ -21,7 +21,6 @@ import (
 var log = logrus.New()
 
 func (s *Strategy) Init(ctx context.Context, session *bbgo.ExchangeSession) error {
-	s.StartTime = time.Now()
 	s.InitLogger()
 
 	accountStatus, err := s.GetAccountStatus(ctx, session)
@@ -113,13 +112,13 @@ func (s *Strategy) InitQuoteQuantityExceedTrigger() {
 			MaxProfitThresholdRate:           0.048,
 			//ReverseImbalanceThresholdTriggerRate: 0.5,
 		}
-		trig.OnTrigger = func(book types.BookTicker, profit float64) {
+		trig.OnTrigger = func(book *types.BookTicker, profit float64) {
 			s.TriggerSet.OnTrigger(book)
 		}
-		trig.OnUnTrigger = func(book types.BookTicker, profit float64) {
+		trig.OnUnTrigger = func(book *types.BookTicker, profit float64) {
 			s.TriggerSet.OnUnTrigger(book, profit)
 		}
-		trig.OnKeepTrigger = func(book types.BookTicker, profit float64) {
+		trig.OnKeepTrigger = func(book *types.BookTicker, profit float64) {
 		}
 		s.QuoteQuantityExceedTriggers[symbol] = trig
 	}
@@ -171,7 +170,7 @@ func (s *Strategy) InitFeeRates(ctx context.Context, session *bbgo.ExchangeSessi
 		}
 		s.FeeRates[symbol] = rates
 		log.Infof("[%s]FeeRate: %s", symbol, s.FeeRates[symbol])
-		time.Sleep(2 * time.Second)
+		time.Sleep(time.Second)
 	}
 	return nil
 }

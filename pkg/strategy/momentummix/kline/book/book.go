@@ -1,140 +1,75 @@
-package aggtrade
+package book
 
 import (
-	"github.com/c9s/bbgo/pkg/fixedpoint"
-	"github.com/c9s/bbgo/pkg/strategy/momentummix/config"
-	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/aggtrade/influxpersist"
+	"fmt"
+	"github.com/c9s/bbgo/pkg/bbgo"
+	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/book/fullbook"
 	"github.com/c9s/bbgo/pkg/types"
-	"math"
+	"sort"
 	"time"
 )
 
 type WindowBase struct {
-	StartTime         time.Time        `json:"startTime" db:"start_time"`
-	EndTime           time.Time        `json:"endTime" db:"end_time"`
-	Quantity          fixedpoint.Value `json:"quantity" db:"quantity"`
-	QuoteQuantity     fixedpoint.Value `json:"quoteQuantity" db:"quote_quantity"`
-	SellQuantity      fixedpoint.Value `json:"sellQuantity" db:"sell_quantity"`
-	SellQuoteQuantity fixedpoint.Value `json:"sellQuoteQuantity" db:"sell_quote_quantity"`
-	BuyQuantity       fixedpoint.Value `json:"buyQuantity" db:"buy_quantity"`
-	BuyQuoteQuantity  fixedpoint.Value `json:"buyQuoteQuantity" db:"buy_quote_quantity"`
-	Open              fixedpoint.Value `json:"open" db:"open"`
-	Close             fixedpoint.Value `json:"close" db:"close"`
-	High              fixedpoint.Value `json:"high" db:"high"`
-	Low               fixedpoint.Value `json:"low" db:"low"`
-	IsClosed          bool             `json:"isClosed" db:"is_closed"`
-	TradeCount        int              `json:"tradeCount" db:"trade_count"`
+	StartTime       time.Time             `json:"startTime" db:"start_time"`
+	EndTime         time.Time             `json:"endTime" db:"end_time"`
+	AggUpdate       *types.SliceOrderBook `json:"aggUpdate" db:"agg_update"`
+	Open            *types.SliceOrderBook `json:"open" db:"open"`
+	Close           *types.SliceOrderBook `json:"close" db:"close"`
+	IsClosed        bool                  `json:"isClosed" db:"is_closed"`
+	BookUpdateCount int                   `json:"bookUpdateCount" db:"book_update_count"`
 }
 
-var TradeDirectionAll = "all"
-var TradeDirectionSell = "sell"
-var TradeDirectionBuy = "buy"
-
-func (w *WindowBase) GetQuoteQuantityRate(direction string, duration time.Duration) float64 {
-	if w == nil || w.IsEmpty() {
-		return 0
+func AppendBookUpdates(src *types.SliceOrderBook, bookUpdates []*types.SliceOrderBook) {
+	if len(bookUpdates) == 0 {
+		return
 	}
-	var qu float64
-	if direction == TradeDirectionAll {
-		qu = w.QuoteQuantity.Float64()
+	for i := range bookUpdates {
+		src.UpdateBids(bookUpdates[i].Bids)
+		src.UpdateAsks(bookUpdates[i].Asks)
+		src.LastUpdateId = bookUpdates[i].LastUpdateId
+		src.TransactionTime = bookUpdates[i].TransactionTime
+		src.FinalUpdateID = bookUpdates[i].FinalUpdateID
 	}
-	if direction == TradeDirectionSell {
-		qu = w.SellQuoteQuantity.Float64()
-	}
-	if direction == TradeDirectionBuy {
-		qu = w.BuyQuoteQuantity.Float64()
-	}
-	fixedTimeSecond := duration.Seconds()
-	return qu / fixedTimeSecond
+	return
 }
 
-func (w *WindowBase) GetQuantityRate(direction string, duration time.Duration) float64 {
-	if w == nil || w.IsEmpty() {
-		return 0
+func CopyBook(book *types.SliceOrderBook) *types.SliceOrderBook {
+	if book == nil {
+		return nil
 	}
-	var qu float64
-	if direction == TradeDirectionAll {
-		qu = w.Quantity.Float64()
+	newBids := make(types.PriceVolumeSlice, 0, len(book.Bids))
+	newAsks := make(types.PriceVolumeSlice, 0, len(book.Asks))
+	copy(newBids, book.Bids)
+	copy(newAsks, book.Asks)
+	return &types.SliceOrderBook{
+		Symbol:                book.Symbol,
+		Bids:                  newBids,
+		Asks:                  newAsks,
+		Time:                  book.Time,
+		LastUpdateId:          book.LastUpdateId,
+		TransactionTime:       book.TransactionTime,
+		FirstUpdateID:         book.FirstUpdateID,
+		FinalUpdateID:         book.FinalUpdateID,
+		PreviousFinalUpdateID: book.PreviousFinalUpdateID,
 	}
-	if direction == TradeDirectionSell {
-		qu = w.SellQuantity.Float64()
-	}
-	if direction == TradeDirectionBuy {
-		qu = w.BuyQuantity.Float64()
-	}
-	fixedTimeSecond := duration.Seconds()
-	return qu / fixedTimeSecond
 }
 
-func (w *WindowBase) GetTradeCount() int {
-	if w == nil {
-		return 0
+func (w *WindowBase) Update(book *types.SliceOrderBook) {
+	if w.Open == nil {
+		w.Open = book
 	}
-	return w.TradeCount
-}
-
-func (w *WindowBase) GetFluctuation() float64 {
-	if w.TradeCount == 0 {
-		return 0
-	}
-	if w.Open.IsZero() {
-		return 0
-	}
-	return w.Close.Sub(w.Open).Div(w.Open).Float64()
-}
-
-func (w *WindowBase) GetAmplitude() float64 {
-	if w.TradeCount == 0 {
-		return 0
-	}
-	if w.Open.IsZero() {
-		return 0
-	}
-	return w.High.Sub(w.Low).Div(w.Open).Float64()
-}
-
-func (w *WindowBase) GetLowerAmplitude() float64 {
-	if w.TradeCount == 0 {
-		return 0
-	}
-	if w.Open.IsZero() {
-		return 0
-	}
-	return w.Open.Sub(w.Low).Div(w.Open).Float64()
-}
-
-func (w *WindowBase) GetUpperAmplitude() float64 {
-	if w.TradeCount == 0 {
-		return 0
-	}
-	if w.Open.IsZero() {
-		return 0
-	}
-	return w.High.Sub(w.Open).Div(w.Open).Float64()
-}
-
-func (w *WindowBase) Update(trade *types.Trade) {
-	if w.Open == 0 {
-		w.Open = trade.Price
+	if w.AggUpdate == nil {
+		w.AggUpdate = CopyBook(book)
+	} else {
+		AppendBookUpdates(w.AggUpdate, append([]*types.SliceOrderBook{}, book))
 	}
 	if w.StartTime.IsZero() {
-		w.StartTime = time.Time(trade.Time)
+		w.StartTime = book.TransactionTime
 	}
 
-	w.Close = trade.Price
-	w.EndTime = time.Time(trade.Time)
-	w.High = fixedpoint.Max(w.High, trade.Price)
-	w.Low = fixedpoint.Min(w.Low, trade.Price)
-	w.Quantity += trade.Quantity
-	w.QuoteQuantity += trade.QuoteQuantity
-	if trade.IsMaker {
-		w.SellQuantity += trade.Quantity
-		w.SellQuoteQuantity += trade.QuoteQuantity
-	} else {
-		w.BuyQuantity += trade.Quantity
-		w.BuyQuoteQuantity += trade.QuoteQuantity
-	}
-	w.TradeCount++
+	w.Close = book
+	w.EndTime = book.TransactionTime
+	w.BookUpdateCount++
 }
 
 func (w *WindowBase) AppendAfter(afterWindow *WindowBase) *WindowBase {
@@ -147,18 +82,12 @@ func (w *WindowBase) AppendAfter(afterWindow *WindowBase) *WindowBase {
 	appendedWindow := NewWindowBase()
 	appendedWindow.StartTime = w.StartTime
 	appendedWindow.EndTime = afterWindow.EndTime
-	appendedWindow.Quantity = w.Quantity + afterWindow.Quantity
-	appendedWindow.QuoteQuantity = w.QuoteQuantity + afterWindow.QuoteQuantity
-	appendedWindow.SellQuantity = w.SellQuantity + afterWindow.SellQuantity
-	appendedWindow.SellQuoteQuantity = w.SellQuoteQuantity + afterWindow.SellQuoteQuantity
-	appendedWindow.BuyQuantity = w.BuyQuantity + afterWindow.BuyQuantity
-	appendedWindow.BuyQuoteQuantity = w.BuyQuoteQuantity + afterWindow.BuyQuoteQuantity
+	appendedWindow.AggUpdate = CopyBook(w.AggUpdate)
+	AppendBookUpdates(appendedWindow.AggUpdate, []*types.SliceOrderBook{afterWindow.AggUpdate})
 	appendedWindow.Open = w.Open
 	appendedWindow.Close = afterWindow.Close
-	appendedWindow.High = fixedpoint.Max(w.High, afterWindow.High)
-	appendedWindow.Low = fixedpoint.Min(w.Low, afterWindow.Low)
-	appendedWindow.TradeCount = w.TradeCount + afterWindow.TradeCount
 	appendedWindow.IsClosed = afterWindow.IsClosed
+	appendedWindow.BookUpdateCount = w.BookUpdateCount + afterWindow.BookUpdateCount
 	return appendedWindow
 }
 
@@ -172,35 +101,27 @@ func (w *WindowBase) AppendBefore(beforeWindow *WindowBase) *WindowBase {
 	appendedWindow := NewWindowBase()
 	appendedWindow.StartTime = beforeWindow.StartTime
 	appendedWindow.EndTime = w.EndTime
-	appendedWindow.Quantity = w.Quantity + beforeWindow.Quantity
-	appendedWindow.QuoteQuantity = w.QuoteQuantity + beforeWindow.QuoteQuantity
-	appendedWindow.SellQuantity = w.SellQuantity + beforeWindow.SellQuantity
-	appendedWindow.SellQuoteQuantity = w.SellQuoteQuantity + beforeWindow.SellQuoteQuantity
-	appendedWindow.BuyQuantity = w.BuyQuantity + beforeWindow.BuyQuantity
-	appendedWindow.BuyQuoteQuantity = w.BuyQuoteQuantity + beforeWindow.BuyQuoteQuantity
+	appendedWindow.AggUpdate = CopyBook(beforeWindow.AggUpdate)
+	AppendBookUpdates(appendedWindow.AggUpdate, []*types.SliceOrderBook{w.AggUpdate})
 	appendedWindow.Open = beforeWindow.Open
 	appendedWindow.Close = w.Close
-	appendedWindow.High = fixedpoint.Max(w.High, beforeWindow.High)
-	appendedWindow.Low = fixedpoint.Min(w.Low, beforeWindow.Low)
-	appendedWindow.TradeCount = w.TradeCount + beforeWindow.TradeCount
 	appendedWindow.IsClosed = w.IsClosed
+	appendedWindow.BookUpdateCount = beforeWindow.BookUpdateCount + w.BookUpdateCount
 	return appendedWindow
 }
 
 func (w *WindowBase) IsEmpty() bool {
-	return w == nil || w.TradeCount == 0
+	return w == nil || w.BookUpdateCount == 0
 }
 
 func NewWindowBase() *WindowBase {
-	return &WindowBase{
-		Low: fixedpoint.NewFromFloat(math.Inf(1)),
-	}
+	return &WindowBase{}
 }
 
 type Second struct {
 	*WindowBase
-	Trades   []*types.Trade
-	Previous *Second
+	BookUpdates []*types.SliceOrderBook
+	Previous    *Second
 }
 
 type Minute struct {
@@ -222,22 +143,23 @@ type Day struct {
 }
 
 type Kline struct {
-	Days            map[string]*Day
-	MaxHours        int
-	StartTime       time.Time
-	EndTime         time.Time
-	TradeCount      int
-	influxClient    *influxpersist.Client
-	Symbol          string
-	Exchange        types.ExchangeName
-	IsEnablePersist bool
+	Days                 map[string]*Day
+	MaxHours             int
+	StartTime            time.Time
+	EndTime              time.Time
+	BookUpdateCount      int
+	Symbol               string
+	Exchange             types.ExchangeName
+	BookSnapshot         *types.SliceOrderBook
+	BookSnapshotWatchDog *fullbook.WatchDog
+	SetupTime            time.Time
 }
 
 func NewSecond(previous *Second) *Second {
 	return &Second{
-		Trades:     make([]*types.Trade, 0, 10),
-		WindowBase: NewWindowBase(),
-		Previous:   previous,
+		BookUpdates: make([]*types.SliceOrderBook, 0),
+		WindowBase:  NewWindowBase(),
+		Previous:    previous,
 	}
 }
 
@@ -249,12 +171,38 @@ func (s *Second) RemoveBefore(t time.Time) (allRemove bool) {
 		return false
 	}
 	if s.EndTime.Before(t) {
-		s.Trades = nil
+		s.BookUpdates = nil
 		s.WindowBase = nil
 		s.Previous = nil
 		return true
 	}
 	return false
+}
+
+func (s *Second) GetWindowByUpdateID(from, to int64) *WindowBase {
+	if s == nil || s.IsEmpty() {
+		return nil
+	}
+	if s.AggUpdate.FinalUpdateID < from {
+		return nil
+	}
+	if to != 0 && s.AggUpdate.PreviousFinalUpdateID > to {
+		return nil
+	}
+	if s.AggUpdate.PreviousFinalUpdateID >= from && (to == 0 || s.AggUpdate.FinalUpdateID <= to) {
+		return s.WindowBase
+	}
+	w := NewWindowBase()
+	for _, b := range s.BookUpdates {
+		if b.FinalUpdateID < from {
+			continue
+		}
+		if to != 0 && b.PreviousFinalUpdateID > to {
+			continue
+		}
+		w.Update(b)
+	}
+	return s.WindowBase
 }
 
 func (s *Second) GetWindow(from, to time.Time) *WindowBase {
@@ -268,21 +216,21 @@ func (s *Second) GetWindow(from, to time.Time) *WindowBase {
 		return s.WindowBase
 	}
 	w := NewWindowBase()
-	for _, trade := range s.Trades {
-		if trade.Time.After(to) {
+	for _, b := range s.BookUpdates {
+		if b.TransactionTime.After(to) {
 			continue
 		}
-		if trade.Time.Before(from) {
+		if b.TransactionTime.Before(from) {
 			continue
 		}
-		w.Update(trade)
+		w.Update(b)
 	}
 	return w
 }
 
-func (s *Second) AppendTrade(trade *types.Trade) {
-	s.Trades = append(s.Trades, trade)
-	s.Update(trade)
+func (s *Second) AppendBook(book *types.SliceOrderBook) {
+	s.BookUpdates = append(s.BookUpdates, book)
+	s.Update(book)
 }
 
 func (s *Second) CloseWindow() {
@@ -341,6 +289,29 @@ func (m *Minute) RemoveBefore(t time.Time) (allRemove bool) {
 	return false
 }
 
+func (m *Minute) GetWindowByUpdateID(from, to int64) *WindowBase {
+	if m == nil || m.IsEmpty() {
+		return nil
+	}
+	if m.AggUpdate.FinalUpdateID < from {
+		return nil
+	}
+	if to != 0 && m.AggUpdate.PreviousFinalUpdateID > to {
+		return nil
+	}
+	if m.AggUpdate.PreviousFinalUpdateID >= from && (to == 0 || m.AggUpdate.FinalUpdateID <= to) {
+		return m.WindowBase
+	}
+	w := NewWindowBase()
+	for _, sec := range m.Seconds {
+		if sec == nil {
+			continue
+		}
+		w = w.AppendAfter(sec.GetWindowByUpdateID(from, to))
+	}
+	return w
+}
+
 func (m *Minute) GetWindow(from, to time.Time) *WindowBase {
 	if m == nil || m.IsEmpty() {
 		return nil
@@ -374,8 +345,8 @@ func (m *Minute) GetSecond(second int) *Second {
 	return m.Seconds[second]
 }
 
-func (m *Minute) AppendTrade(trade *types.Trade) {
-	s := time.Time(trade.Time).Second()
+func (m *Minute) AppendBook(book *types.SliceOrderBook) {
+	s := book.TransactionTime.Second()
 	second := m.Seconds[s]
 	if second == nil {
 		var previousSecond *Second
@@ -391,8 +362,8 @@ func (m *Minute) AppendTrade(trade *types.Trade) {
 		second = NewSecond(previousSecond)
 		m.Seconds[s] = second
 	}
-	second.AppendTrade(trade)
-	m.Update(trade)
+	second.AppendBook(book)
+	m.Update(book)
 }
 
 func (m *Minute) CloseWindow() {
@@ -452,6 +423,29 @@ func (h *Hour) RemoveBefore(t time.Time) (allRemove bool) {
 	return false
 }
 
+func (h *Hour) GetWindowByUpdateID(from, to int64) *WindowBase {
+	if h == nil || h.IsEmpty() {
+		return nil
+	}
+	if h.AggUpdate.FinalUpdateID < from {
+		return nil
+	}
+	if to != 0 && h.AggUpdate.PreviousFinalUpdateID > to {
+		return nil
+	}
+	if h.AggUpdate.PreviousFinalUpdateID >= from && (to == 0 || h.AggUpdate.FinalUpdateID <= to) {
+		return h.WindowBase
+	}
+	w := NewWindowBase()
+	for _, minute := range h.Minutes {
+		if minute == nil {
+			continue
+		}
+		w = w.AppendAfter(minute.GetWindowByUpdateID(from, to))
+	}
+	return w
+}
+
 func (h *Hour) GetWindow(from, to time.Time) *WindowBase {
 	if h == nil || h.IsEmpty() {
 		return nil
@@ -485,8 +479,8 @@ func (h *Hour) GetMinute(minute int) *Minute {
 	return h.Minutes[minute]
 }
 
-func (h *Hour) AppendTrade(trade *types.Trade) {
-	m := time.Time(trade.Time).Minute()
+func (h *Hour) AppendBook(book *types.SliceOrderBook) {
+	m := book.TransactionTime.Minute()
 	minute := h.Minutes[m]
 	if minute == nil {
 		var previousMinute *Minute
@@ -502,8 +496,8 @@ func (h *Hour) AppendTrade(trade *types.Trade) {
 		minute = NewMinute(previousMinute)
 		h.Minutes[m] = minute
 	}
-	minute.AppendTrade(trade)
-	h.Update(trade)
+	minute.AppendBook(book)
+	h.Update(book)
 }
 
 func (h *Hour) CloseWindow() {
@@ -563,6 +557,29 @@ func (d *Day) RemoveBefore(t time.Time) (allRemove bool) {
 	return false
 }
 
+func (d *Day) GetWindowByUpdateID(from, to int64) *WindowBase {
+	if d == nil || d.IsEmpty() {
+		return nil
+	}
+	if d.AggUpdate.FinalUpdateID < from {
+		return nil
+	}
+	if to != 0 && d.AggUpdate.PreviousFinalUpdateID > to {
+		return nil
+	}
+	if d.AggUpdate.PreviousFinalUpdateID >= from && (to == 0 || d.AggUpdate.FinalUpdateID <= to) {
+		return d.WindowBase
+	}
+	w := NewWindowBase()
+	for _, hour := range d.Hours {
+		if hour == nil {
+			continue
+		}
+		w = w.AppendAfter(hour.GetWindowByUpdateID(from, to))
+	}
+	return w
+}
+
 func (d *Day) GetWindow(from, to time.Time) *WindowBase {
 	if d == nil || d.IsEmpty() {
 		return nil
@@ -597,8 +614,8 @@ func (d *Day) GetHour(hour int) *Hour {
 	return d.Hours[hour]
 }
 
-func (d *Day) AppendTrade(trade *types.Trade) {
-	h := time.Time(trade.Time).Hour()
+func (d *Day) AppendBook(book *types.SliceOrderBook) {
+	h := book.TransactionTime.Hour()
 	hour := d.Hours[h]
 	if hour == nil {
 		var previousHour *Hour
@@ -614,8 +631,8 @@ func (d *Day) AppendTrade(trade *types.Trade) {
 		hour = NewHour(previousHour)
 		d.Hours[h] = hour
 	}
-	hour.AppendTrade(trade)
-	d.Update(trade)
+	hour.AppendBook(book)
+	d.Update(book)
 }
 
 func (d *Day) CloseWindow() {
@@ -626,27 +643,14 @@ func (d *Day) CloseWindow() {
 	d.Hours[23].CloseWindow()
 }
 
-func NewKline(maxHours int, influxConfig *config.InfluxDB, symbol string, exchange types.ExchangeName) (*Kline, error) {
-	var influxClient *influxpersist.Client
-	var err error
-	if influxConfig != nil {
-		influxClient, err = influxpersist.NewClient(
-			influxConfig.URL,
-			influxConfig.Token,
-			influxConfig.Org,
-			influxpersist.Bucket,
-			symbol,
-			exchange)
-		if err != nil {
-			return nil, err
-		}
-	}
+func NewKline(maxHours int, symbol string, session *bbgo.ExchangeSession) (*Kline, error) {
 	return &Kline{
-		Days:         make(map[string]*Day),
-		MaxHours:     maxHours,
-		influxClient: influxClient,
-		Symbol:       symbol,
-		Exchange:     exchange,
+		SetupTime:            time.Now(),
+		Days:                 make(map[string]*Day),
+		MaxHours:             maxHours,
+		Symbol:               symbol,
+		Exchange:             session.ExchangeName,
+		BookSnapshotWatchDog: fullbook.NewWatchDog(symbol, session),
 	}, nil
 }
 
@@ -675,21 +679,33 @@ func (k *Kline) GetDay(date string) *Day {
 	return k.Days[date]
 }
 
-func (k *Kline) GetPersist(from time.Time, to time.Time) ([]*types.Trade, *WindowBase, error) {
-	if !k.IsEnablePersist {
-		trades, window := k.Get(from, to)
-		return trades, window, nil
+func (k *Kline) GetWindowByUpdateID(from, to int64) *WindowBase {
+	if k == nil {
+		return nil
 	}
-	k.influxClient.Flush()
-	trades, err := k.influxClient.Get(from, to)
-	if err != nil {
-		return nil, nil, err
+	if len(k.Days) == 0 {
+		return nil
 	}
-	window := NewWindowBase()
-	for _, trade := range trades {
-		window.Update(trade)
+	sortedDays := make([]time.Time, 0, len(k.Days))
+	for date := range k.Days {
+		day, err := time.Parse("2006-01-02", date)
+		if err != nil {
+			continue
+		}
+		sortedDays = append(sortedDays, day)
 	}
-	return trades, window, nil
+	sort.Slice(sortedDays, func(i, j int) bool {
+		return sortedDays[i].Before(sortedDays[j])
+	})
+	w := NewWindowBase()
+	for _, day := range sortedDays {
+		d := k.Days[day.Format("2006-01-02")]
+		if d == nil {
+			continue
+		}
+		w = w.AppendAfter(d.GetWindowByUpdateID(from, to))
+	}
+	return w
 }
 
 func (k *Kline) GetWindow(from time.Time, to time.Time) *WindowBase {
@@ -715,8 +731,8 @@ func (k *Kline) GetWindow(from time.Time, to time.Time) *WindowBase {
 	return w
 }
 
-func (k *Kline) Get(from time.Time, to time.Time) ([]*types.Trade, *WindowBase) {
-	var trades []*types.Trade
+func (k *Kline) Get(from time.Time, to time.Time) ([]*types.SliceOrderBook, *WindowBase) {
+	var books []*types.SliceOrderBook
 	window := NewWindowBase()
 	for _, day := range k.Days {
 		if day.StartTime.After(to) {
@@ -758,62 +774,72 @@ func (k *Kline) Get(from time.Time, to time.Time) ([]*types.Trade, *WindowBase) 
 					if second.EndTime.Before(from) {
 						continue
 					}
-					for _, trade := range second.Trades {
-						if trade.Time.After(to) {
+					for _, b := range second.BookUpdates {
+						if b.TransactionTime.After(to) {
 							continue
 						}
-						if trade.Time.Before(from) {
+						if b.TransactionTime.Before(from) {
 							continue
 						}
-						trades = append(trades, trade)
+						books = append(books, b)
 
-						window.Update(trade)
+						window.Update(b)
 					}
 				}
 			}
 		}
 	}
-	return trades, window
+	return books, window
 }
 
-func (k *Kline) AppendTrade(trade *types.Trade) {
-	date := (time.Time)(trade.Time).Format("2006-01-02")
+func (k *Kline) TryUpdateSnapshot() error {
+	if k.BookSnapshotWatchDog == nil {
+		return fmt.Errorf("book snapshot watch dog is not initialized")
+	}
+	bs := k.BookSnapshotWatchDog.GetLatestBookSnapshot()
+	if bs == nil {
+		return fmt.Errorf("book snapshot is not available")
+	}
+	if k.BookSnapshot == nil {
+		//cbs := CopyBook(bs)
+		//bookUpdates := k.GetWindowByUpdateID(cbs.LastUpdateId, 0)
+		return nil
+	} else {
+
+	}
+	return nil
+}
+
+func (k *Kline) AppendBook(book *types.SliceOrderBook) {
+	date := book.TransactionTime.Format("2006-01-02")
 	day := k.Days[date]
 	if day == nil {
-		previousDate := time.Time(trade.Time).AddDate(0, 0, -1).Format("2006-01-02")
+		previousDate := book.TransactionTime.AddDate(0, 0, -1).Format("2006-01-02")
 		if previousDay := k.Days[previousDate]; previousDay != nil {
 			previousDay.CloseWindow()
 		}
 		day = NewDay(k.Days[date])
 		k.Days[date] = day
 	}
-	day.AppendTrade(trade)
-	k.Update(trade)
+	day.AppendBook(book)
+	k.Update(book)
 
-	minutesCount := trade.Time.Time().Sub(k.StartTime).Minutes()
+	minutesCount := book.TransactionTime.Sub(k.StartTime).Minutes()
 	if k.MaxHours != 0 && int(minutesCount) > k.MaxHours*60 {
-		k.RemoveBefore(trade.Time.Time().Add(-time.Duration(k.MaxHours) * time.Hour))
-	}
-
-	if k.IsEnablePersist {
-		k.influxClient.AppendTrade(trade)
+		k.RemoveBefore(book.TransactionTime.Add(-time.Duration(k.MaxHours) * time.Hour))
 	}
 }
 
-func (k *Kline) Update(trade *types.Trade) {
+func (k *Kline) Update(book *types.SliceOrderBook) {
 	if k.StartTime.IsZero() {
-		k.StartTime = time.Time(trade.Time)
+		k.StartTime = book.TransactionTime
 	}
-	k.EndTime = time.Time(trade.Time)
-	k.TradeCount++
+	k.EndTime = book.TransactionTime
+	k.BookUpdateCount++
 }
 
 func (k *Kline) CloseKline() {
 	if k == nil {
 		return
-	}
-	if k.IsEnablePersist {
-		k.influxClient.Flush()
-		k.influxClient.Close()
 	}
 }

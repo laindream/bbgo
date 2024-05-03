@@ -5,6 +5,7 @@ import (
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/config"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/tick/influxpersist"
 	"github.com/c9s/bbgo/pkg/types"
+	log "github.com/sirupsen/logrus"
 	"math"
 	"sort"
 	"time"
@@ -86,35 +87,45 @@ func NewSecond(previous *Second) *Second {
 	}
 }
 
-func (s *Second) GetFirstAndEnd(from time.Time, to time.Time) (start, end *types.BookTicker, isRealStart, isRealEnd bool) {
+func (s *Second) GetFirstAndEnd(from time.Time, to time.Time, isLastCatchFrom, isLastCatchTo bool) (start, end *types.BookTicker, isRealStart, isRealEnd bool) {
 	if s == nil {
 		return nil, nil, false, false
 	}
-	if s.StartTime.After(to) {
+	if !to.IsZero() && s.StartTime.After(to) {
 		return nil, nil, false, false
 	}
-	if s.EndTime.Before(from) {
+	if !from.IsZero() && s.EndTime.Before(from) {
 		return nil, nil, false, false
 	}
-	if s.StartTime.After(from) {
-		start = s.Open
-	} else {
-		for _, tick := range s.Ticks {
-			if tick.TransactionTime.After(from) {
-				start = tick
+	if !from.IsZero() {
+		if s.StartTime.After(from) {
+			start = s.Open
+			if !isLastCatchFrom {
 				isRealStart = true
-				break
+			}
+		} else {
+			for _, tick := range s.Ticks {
+				if tick.TransactionTime.After(from) {
+					start = tick
+					isRealStart = true
+					break
+				}
 			}
 		}
 	}
-	if s.EndTime.Before(to) {
-		end = s.Close
-	} else {
-		for i := len(s.Ticks) - 1; i >= 0; i-- {
-			if s.Ticks[i].Time.Before(to) {
-				end = s.Ticks[i]
+	if !to.IsZero() {
+		if s.EndTime.Before(to) {
+			end = s.Close
+			if !isLastCatchTo {
 				isRealEnd = true
-				break
+			}
+		} else {
+			for i := len(s.Ticks) - 1; i >= 0; i-- {
+				if s.Ticks[i].Time.Before(to) {
+					end = s.Ticks[i]
+					isRealEnd = true
+					break
+				}
 			}
 		}
 	}
@@ -161,43 +172,57 @@ func NewMinute(previous *Minute) *Minute {
 	}
 }
 
-func (m *Minute) GetFirstAndEnd(from time.Time, to time.Time) (start, end *types.BookTicker, isRealStart, isRealEnd bool) {
+func (m *Minute) GetFirstAndEnd(from time.Time, to time.Time, isLastCatchFrom, isLastCatchTo bool) (start, end *types.BookTicker, isRealStart, isRealEnd bool) {
 	if m == nil {
 		return nil, nil, false, false
 	}
-	if m.StartTime.After(to) {
+	if !to.IsZero() && m.StartTime.After(to) {
 		return nil, nil, false, false
 	}
-	if m.EndTime.Before(from) {
+	if !from.IsZero() && m.EndTime.Before(from) {
 		return nil, nil, false, false
 	}
-	if m.StartTime.After(from) {
-		start = m.Open
-	} else {
-		for _, second := range m.Seconds {
-			if second == nil {
-				continue
-			}
-			secStart, _, secIsRealStart, _ := second.GetFirstAndEnd(from, to)
-			if secStart != nil && secIsRealStart {
-				start = secStart
+	if !from.IsZero() {
+		if m.StartTime.After(from) {
+			start = m.Open
+			if !isLastCatchFrom {
 				isRealStart = true
-				break
+			}
+		} else {
+			isLastCatchFromSec := isLastCatchFrom
+			for _, second := range m.Seconds {
+				if second == nil {
+					continue
+				}
+				secStart, _, secIsRealStart, _ := second.GetFirstAndEnd(from, time.Time{}, isLastCatchFromSec, false)
+				isLastCatchFromSec = secStart != nil
+				if secStart != nil && secIsRealStart {
+					start = secStart
+					isRealStart = true
+					break
+				}
 			}
 		}
 	}
-	if m.EndTime.Before(to) {
-		end = m.Close
-	} else {
-		for i := 59; i >= 0; i-- {
-			if m.Seconds[i] == nil {
-				continue
-			}
-			_, secEnd, _, secIsRealEnd := m.Seconds[i].GetFirstAndEnd(from, to)
-			if secEnd != nil && secIsRealEnd {
-				end = secEnd
+	if !to.IsZero() {
+		if m.EndTime.Before(to) {
+			end = m.Close
+			if !isLastCatchTo {
 				isRealEnd = true
-				break
+			}
+		} else {
+			isLastCatchToSec := isLastCatchTo
+			for i := 59; i >= 0; i-- {
+				if m.Seconds[i] == nil {
+					continue
+				}
+				_, secEnd, _, secIsRealEnd := m.Seconds[i].GetFirstAndEnd(time.Time{}, to, false, isLastCatchToSec)
+				isLastCatchToSec = secEnd != nil
+				if secEnd != nil && secIsRealEnd {
+					end = secEnd
+					isRealEnd = true
+					break
+				}
 			}
 		}
 	}
@@ -289,43 +314,57 @@ func NewHour(previous *Hour) *Hour {
 	}
 }
 
-func (h *Hour) GetFirstAndEnd(from time.Time, to time.Time) (start, end *types.BookTicker, isRealStart, isRealEnd bool) {
+func (h *Hour) GetFirstAndEnd(from time.Time, to time.Time, isLastCatchFrom, isLastCatchTo bool) (start, end *types.BookTicker, isRealStart, isRealEnd bool) {
 	if h == nil {
 		return nil, nil, false, false
 	}
-	if h.StartTime.After(to) {
+	if !to.IsZero() && h.StartTime.After(to) {
 		return nil, nil, false, false
 	}
-	if h.EndTime.Before(from) {
+	if !from.IsZero() && h.EndTime.Before(from) {
 		return nil, nil, false, false
 	}
-	if h.StartTime.After(from) {
-		start = h.Open
-	} else {
-		for _, minute := range h.Minutes {
-			if minute == nil {
-				continue
-			}
-			minStart, _, minIsRealStart, _ := minute.GetFirstAndEnd(from, to)
-			if minStart != nil && minIsRealStart {
-				start = minStart
+	if !from.IsZero() {
+		if h.StartTime.After(from) {
+			start = h.Open
+			if !isLastCatchFrom {
 				isRealStart = true
-				break
+			}
+		} else {
+			isLastCatchFromMin := isLastCatchFrom
+			for _, minute := range h.Minutes {
+				if minute == nil {
+					continue
+				}
+				minStart, _, minIsRealStart, _ := minute.GetFirstAndEnd(from, time.Time{}, isLastCatchFromMin, false)
+				isLastCatchFromMin = minStart != nil
+				if minStart != nil && minIsRealStart {
+					start = minStart
+					isRealStart = true
+					break
+				}
 			}
 		}
 	}
-	if h.EndTime.Before(to) {
-		end = h.Close
-	} else {
-		for i := 59; i >= 0; i-- {
-			if h.Minutes[i] == nil {
-				continue
-			}
-			_, minEnd, _, minIsRealEnd := h.Minutes[i].GetFirstAndEnd(from, to)
-			if minEnd != nil && minIsRealEnd {
-				end = minEnd
+	if !to.IsZero() {
+		if h.EndTime.Before(to) {
+			end = h.Close
+			if !isLastCatchTo {
 				isRealEnd = true
-				break
+			}
+		} else {
+			isLastCatchToMin := isLastCatchTo
+			for i := 59; i >= 0; i-- {
+				if h.Minutes[i] == nil {
+					continue
+				}
+				_, minEnd, _, minIsRealEnd := h.Minutes[i].GetFirstAndEnd(time.Time{}, to, false, isLastCatchToMin)
+				isLastCatchToMin = minEnd != nil
+				if minEnd != nil && minIsRealEnd {
+					end = minEnd
+					isRealEnd = true
+					break
+				}
 			}
 		}
 	}
@@ -410,43 +449,57 @@ func NewDay(previous *Day) *Day {
 	}
 }
 
-func (d *Day) GetFirstAndEnd(from time.Time, to time.Time) (start, end *types.BookTicker, isRealStart, isRealEnd bool) {
+func (d *Day) GetFirstAndEnd(from time.Time, to time.Time, isLastCatchFrom, isLastCatchTo bool) (start, end *types.BookTicker, isRealStart, isRealEnd bool) {
 	if d == nil {
 		return nil, nil, false, false
 	}
-	if d.StartTime.After(to) {
+	if !to.IsZero() && d.StartTime.After(to) {
 		return nil, nil, false, false
 	}
-	if d.EndTime.Before(from) {
+	if !from.IsZero() && d.EndTime.Before(from) {
 		return nil, nil, false, false
 	}
-	if d.StartTime.After(from) {
-		start = d.Open
-	} else {
-		for _, hour := range d.Hours {
-			if hour == nil {
-				continue
-			}
-			hourStart, _, hourIsRealStart, _ := hour.GetFirstAndEnd(from, to)
-			if hourStart != nil && hourIsRealStart {
-				start = hourStart
+	if !from.IsZero() {
+		if d.StartTime.After(from) {
+			start = d.Open
+			if !isLastCatchFrom {
 				isRealStart = true
-				break
+			}
+		} else {
+			isLastCatchFromHour := isLastCatchFrom
+			for _, hour := range d.Hours {
+				if hour == nil {
+					continue
+				}
+				hourStart, _, hourIsRealStart, _ := hour.GetFirstAndEnd(from, time.Time{}, isLastCatchFromHour, false)
+				isLastCatchFromHour = hourStart != nil
+				if hourStart != nil && hourIsRealStart {
+					start = hourStart
+					isRealStart = true
+					break
+				}
 			}
 		}
 	}
-	if d.EndTime.Before(to) {
-		end = d.Close
-	} else {
-		for i := 23; i >= 0; i-- {
-			if d.Hours[i] == nil {
-				continue
-			}
-			_, hourEnd, _, hourIsRealEnd := d.Hours[i].GetFirstAndEnd(from, to)
-			if hourEnd != nil && hourIsRealEnd {
-				end = hourEnd
+	if !to.IsZero() {
+		if d.EndTime.Before(to) {
+			end = d.Close
+			if !isLastCatchTo {
 				isRealEnd = true
-				break
+			}
+		} else {
+			isLastCatchToHour := isLastCatchTo
+			for i := 23; i >= 0; i-- {
+				if d.Hours[i] == nil {
+					continue
+				}
+				_, hourEnd, _, hourIsRealEnd := d.Hours[i].GetFirstAndEnd(time.Time{}, to, false, isLastCatchToHour)
+				isLastCatchToHour = hourEnd != nil
+				if hourEnd != nil && hourIsRealEnd {
+					end = hourEnd
+					isRealEnd = true
+					break
+				}
 			}
 		}
 	}
@@ -621,11 +674,14 @@ func (k *Kline) GetFirstAndEnd(from time.Time, to time.Time) (start, end *types.
 		key := sortedDays[0].Format("2006-01-02")
 		start = k.Days[key].Open
 	} else {
+		isLastCatchFrom := false
 		for _, day := range sortedDays {
-			if day.Before(from) {
+			d := k.Days[day.Format("2006-01-02")]
+			if d == nil {
 				continue
 			}
-			dayStart, _, dayIsRealStart, _ := k.Days[day.Format("2006-01-02")].GetFirstAndEnd(from, to)
+			dayStart, _, dayIsRealStart, _ := d.GetFirstAndEnd(from, time.Time{}, isLastCatchFrom, false)
+			isLastCatchFrom = dayStart != nil
 			if dayStart != nil && dayIsRealStart {
 				start = dayStart
 				break
@@ -636,16 +692,22 @@ func (k *Kline) GetFirstAndEnd(from time.Time, to time.Time) (start, end *types.
 		key := sortedDays[len(sortedDays)-1].Format("2006-01-02")
 		end = k.Days[key].Close
 	} else {
+		isLastCatchTo := false
 		for i := len(sortedDays) - 1; i >= 0; i-- {
-			if sortedDays[i].After(to) {
+			d := k.Days[sortedDays[i].Format("2006-01-02")]
+			if d == nil {
 				continue
 			}
-			dayEnd, _, _, dayIsRealEnd := k.Days[sortedDays[i].Format("2006-01-02")].GetFirstAndEnd(from, to)
+			_, dayEnd, _, dayIsRealEnd := d.GetFirstAndEnd(time.Time{}, to, false, isLastCatchTo)
+			isLastCatchTo = dayEnd != nil
 			if dayEnd != nil && dayIsRealEnd {
 				end = dayEnd
 				break
 			}
 		}
+	}
+	if start == nil || end == nil {
+		log.Errorf("[ERROR]GetFirstAndEnd: start: %v, end: %v", start, end)
 	}
 	return start, end
 }
@@ -725,8 +787,8 @@ func (k *Kline) AppendTick(ticker *types.BookTicker) {
 	day.AppendTick(ticker)
 	k.Update(ticker)
 
-	hoursCount := ticker.TransactionTime.Sub(k.StartTime).Hours()
-	if k.MaxHours != 0 && int(hoursCount) > k.MaxHours {
+	minutesCount := ticker.TransactionTime.Sub(k.StartTime).Minutes()
+	if k.MaxHours != 0 && int(minutesCount) > k.MaxHours*60 {
 		k.RemoveBefore(ticker.TransactionTime.Add(-time.Duration(k.MaxHours) * time.Hour))
 	}
 

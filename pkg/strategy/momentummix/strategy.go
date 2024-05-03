@@ -76,10 +76,10 @@ func (s *Strategy) Subscribe(session *bbgo.ExchangeSession) {
 	for _, symbol := range s.Symbols {
 		session.Subscribe(types.AggTradeChannel, symbol, types.SubscribeOptions{})
 		session.Subscribe(types.BookTickerChannel, symbol, types.SubscribeOptions{})
-		//session.Subscribe(types.BookChannel, symbol, types.SubscribeOptions{
-		//	Depth: types.DepthLevelFull,
-		//	Speed: types.SpeedHigh,
-		//})
+		session.Subscribe(types.BookChannel, symbol, types.SubscribeOptions{
+			Depth: types.DepthLevelFull,
+			Speed: types.SpeedHigh,
+		})
 	}
 }
 
@@ -93,15 +93,19 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 	})
 
 	session.MarketDataStream.OnBookTickerUpdate(func(bookTicker types.BookTicker) {
+		//log.Infof("[%s][%s]bookTicker: %s", time.Now().Sub(bookTicker.TransactionTime), bookTicker.Symbol, bookTicker)
+		if s.StartTime.IsZero() {
+			s.StartTime = time.Now()
+		}
 		s.TickKline[bookTicker.Symbol].AppendTick(&bookTicker)
 		//nearDuration := 1000 * time.Millisecond
 		//s.Captures[bookTicker.Symbol].PushNearDeepQuantityRateRatioWindowItem(120*time.Second, nearDuration)
 		//s.Captures[bookTicker.Symbol].PushNearQuantityRateWindowItem()
-		if time.Now().Sub(s.StartTime) < time.Minute {
+		if time.Now().Sub(s.StartTime) < 2*time.Minute {
 			return
 		}
 		s.TriggerSet.OnUpdateRank()
-		s.QuoteQuantityExceedTriggers[bookTicker.Symbol].BookTickerPush(bookTicker)
+		s.QuoteQuantityExceedTriggers[bookTicker.Symbol].BookTickerPush(&bookTicker)
 	})
 	session.MarketDataStream.OnAggTrade(func(trade types.Trade) {
 		s.AggKline[trade.Symbol].AppendTrade(&trade)
@@ -115,10 +119,24 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 	})
 
 	session.MarketDataStream.OnBookUpdate(func(book types.SliceOrderBook) {
+		//log.Infof("book update: add:%p bids: %d asks: %d", &book, len(book.Bids), len(book.Asks))
+		//b, ok := session.OrderBook(book.Symbol)
+		//if !ok {
+		//	log.Infof("book snapshot error: %s", book.Symbol)
+		//}
+		//asks := b.SideBook(types.SideTypeSell)
+		//bids := b.SideBook(types.SideTypeBuy)
+		//log.Infof("book snapshot: bids: %d asks: %d", len(bids), len(asks))
+		//bb, ba, ok := b.BestBidAndAsk()
+		//if !ok {
+		//	log.Infof("book snapshot error: %s", book.Symbol)
+		//}
+		//log.Infof("[%s][%s]BestBid:%s BestAsk:%s", time.Now().Sub(b.LastUpdateTime()), book.Symbol, bb, ba)
 		//s.printFilteredOrderBook(session, book)
 	})
 
 	session.MarketDataStream.OnBookSnapshot(func(book types.SliceOrderBook) {
+		//log.Infof("book snapshot: add:%p bids: %d asks: %d", &book, len(book.Bids), len(book.Asks))
 		//printData(session, book)
 	})
 	return nil

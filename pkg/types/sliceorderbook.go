@@ -130,7 +130,7 @@ func (b *SliceOrderBook) PriceVolumesBySide(side SideType) PriceVolumeSlice {
 	return nil
 }
 
-func (b *SliceOrderBook) updateAsks(pvs PriceVolumeSlice) {
+func (b *SliceOrderBook) UpdateAsks(pvs PriceVolumeSlice) {
 	for _, pv := range pvs {
 		if pv.Volume.IsZero() {
 			b.Asks = b.Asks.Remove(pv.Price, false)
@@ -140,7 +140,7 @@ func (b *SliceOrderBook) updateAsks(pvs PriceVolumeSlice) {
 	}
 }
 
-func (b *SliceOrderBook) updateBids(pvs PriceVolumeSlice) {
+func (b *SliceOrderBook) UpdateBids(pvs PriceVolumeSlice) {
 	for _, pv := range pvs {
 		if pv.Volume.IsZero() {
 			b.Bids = b.Bids.Remove(pv.Price, true)
@@ -151,8 +151,8 @@ func (b *SliceOrderBook) updateBids(pvs PriceVolumeSlice) {
 }
 
 func (b *SliceOrderBook) update(book SliceOrderBook) {
-	b.updateBids(book.Bids)
-	b.updateAsks(book.Asks)
+	b.UpdateBids(book.Bids)
+	b.UpdateAsks(book.Asks)
 	if !book.TransactionTime.IsZero() {
 		b.lastUpdateTime = defaultTime(book.TransactionTime, time.Now)
 	} else {

@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-type BookTickerTriggerFn func(bookTicker types.BookTicker, profit float64)
+type BookTickerTriggerFn func(bookTicker *types.BookTicker, profit float64)
 
 var ActionBuy = "buy"
 var ActionSell = "sell"
@@ -120,7 +120,7 @@ func (q *QuoteQuantityExceedTrigger) IsTrigger() bool {
 	return q.FirstTriggerTime != nil
 }
 
-func (q *QuoteQuantityExceedTrigger) Trigger(bookTicker types.BookTicker) {
+func (q *QuoteQuantityExceedTrigger) Trigger(bookTicker *types.BookTicker) {
 	q.OngoingProfitThresholdRate = q.ProfitThresholdRate
 	q.OngoingStopLossRate = q.StopLossRate
 	q.TotalTriggerCount++
@@ -147,12 +147,12 @@ func (q *QuoteQuantityExceedTrigger) TriggerDuration() time.Duration {
 	return q.FinalTriggerTime.Sub(*q.FirstTriggerTime)
 }
 
-func (q *QuoteQuantityExceedTrigger) KeepTrigger(bookTicker types.BookTicker) {
+func (q *QuoteQuantityExceedTrigger) KeepTrigger(bookTicker *types.BookTicker) {
 	q.FinalTriggerTime = &bookTicker.TransactionTime
 	q.OnKeepTrigger(bookTicker, 0)
 }
 
-func (q *QuoteQuantityExceedTrigger) UnTrigger(bookTicker types.BookTicker, profit float64) {
+func (q *QuoteQuantityExceedTrigger) UnTrigger(bookTicker *types.BookTicker, profit float64) {
 	if bookTicker.TransactionTime.Sub(*q.FirstTriggerTime) > q.MaxKeepDuration {
 		q.AdaptKeepNearQuoteQuantityRateRatio = q.AdaptKeepNearQuoteQuantityRateRatio * 1.2
 	}
@@ -169,26 +169,26 @@ func (q *QuoteQuantityExceedTrigger) UnTrigger(bookTicker types.BookTicker, prof
 	q.OnUnTrigger(bookTicker, profit)
 }
 
-func (q *QuoteQuantityExceedTrigger) RecordTicker(bookTicker types.BookTicker) {
+func (q *QuoteQuantityExceedTrigger) RecordTicker(bookTicker *types.BookTicker) {
 	if q.FirstTriggerTicker == nil {
-		q.FirstTriggerTicker = &bookTicker
+		q.FirstTriggerTicker = bookTicker
 	}
-	q.FinalTriggerTicker = &bookTicker
+	q.FinalTriggerTicker = bookTicker
 	if q.OngoingHighTicker == nil {
-		q.OngoingHighTicker = &bookTicker
+		q.OngoingHighTicker = bookTicker
 	}
 	if q.OngoingLowTicker == nil {
-		q.OngoingLowTicker = &bookTicker
+		q.OngoingLowTicker = bookTicker
 	}
 	if bookTicker.Buy.Float64() > q.OngoingHighTicker.Buy.Float64() {
-		q.OngoingHighTicker = &bookTicker
+		q.OngoingHighTicker = bookTicker
 	}
 	if bookTicker.Sell.Float64() < q.OngoingLowTicker.Sell.Float64() {
-		q.OngoingLowTicker = &bookTicker
+		q.OngoingLowTicker = bookTicker
 	}
 }
 
-func (q *QuoteQuantityExceedTrigger) BookTickerPush(bookTicker types.BookTicker) {
+func (q *QuoteQuantityExceedTrigger) BookTickerPush(bookTicker *types.BookTicker) {
 	stat := q.History.GetStat()
 	historyQuoteQuantityRate := stat.GetQuoteQuantityRate()
 	if historyQuoteQuantityRate == 0 {
@@ -467,7 +467,7 @@ func (q *QuoteQuantityExceedTrigger) BookTickerPush(bookTicker types.BookTicker)
 
 var maxSearchCount = 8
 
-func (q *QuoteQuantityExceedTrigger) GetTriggerNearWindow(bookTicker types.BookTicker) *aggtrade.WindowBase {
+func (q *QuoteQuantityExceedTrigger) GetTriggerNearWindow(bookTicker *types.BookTicker) *aggtrade.WindowBase {
 	triggerNearWindow := q.AggKline.GetWindow(bookTicker.TransactionTime.Add(-q.TriggerNearDuration), bookTicker.TransactionTime)
 	searchCount := 0
 	for searchCount < maxSearchCount &&
@@ -633,7 +633,7 @@ func (q *QuoteQuantityExceedTrigger) ReduceTriggerPrice() {
 	}
 }
 
-func (q *QuoteQuantityExceedTrigger) GetKeepNearWindow(bookTicker types.BookTicker) *aggtrade.WindowBase {
+func (q *QuoteQuantityExceedTrigger) GetKeepNearWindow(bookTicker *types.BookTicker) *aggtrade.WindowBase {
 	keepNearWindow := q.AggKline.GetWindow(bookTicker.TransactionTime.Add(-q.KeepNearDuration), bookTicker.TransactionTime)
 	searchCount := 0
 	for searchCount < maxSearchCount &&
