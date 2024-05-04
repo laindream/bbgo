@@ -133,9 +133,9 @@ func (b *SliceOrderBook) PriceVolumesBySide(side SideType) PriceVolumeSlice {
 func (b *SliceOrderBook) UpdateAsks(pvs PriceVolumeSlice) {
 	for _, pv := range pvs {
 		if pv.Volume.IsZero() {
-			b.Asks = b.Asks.Remove(pv.Price, false)
+			b.Asks.Remove(pv.Price, false)
 		} else {
-			b.Asks = b.Asks.Upsert(pv, false)
+			b.Asks.Upsert(pv, false)
 		}
 	}
 }
@@ -143,9 +143,9 @@ func (b *SliceOrderBook) UpdateAsks(pvs PriceVolumeSlice) {
 func (b *SliceOrderBook) UpdateBids(pvs PriceVolumeSlice) {
 	for _, pv := range pvs {
 		if pv.Volume.IsZero() {
-			b.Bids = b.Bids.Remove(pv.Price, true)
+			b.Bids.Remove(pv.Price, true)
 		} else {
-			b.Bids = b.Bids.Upsert(pv, true)
+			b.Bids.Upsert(pv, true)
 		}
 	}
 }

@@ -12,14 +12,22 @@ import (
 )
 
 type WindowBase struct {
-	StartTime time.Time         `json:"startTime" db:"start_time"`
-	EndTime   time.Time         `json:"endTime" db:"end_time"`
-	Open      *types.BookTicker `json:"open" db:"open"`
-	Close     *types.BookTicker `json:"close" db:"close"`
-	High      fixedpoint.Value  `json:"high" db:"high"`
-	Low       fixedpoint.Value  `json:"low" db:"low"`
-	IsClosed  bool              `json:"isClosed" db:"is_closed"`
-	TickCount int               `json:"tickCount" db:"tick_count"`
+	StartTime   time.Time         `json:"startTime" db:"start_time"`
+	EndTime     time.Time         `json:"endTime" db:"end_time"`
+	Open        *types.BookTicker `json:"open" db:"open"`
+	Close       *types.BookTicker `json:"close" db:"close"`
+	High        fixedpoint.Value  `json:"high" db:"high"`
+	Low         fixedpoint.Value  `json:"low" db:"low"`
+	IsClosed    bool              `json:"isClosed" db:"is_closed"`
+	TickCount   int               `json:"tickCount" db:"tick_count"`
+	TotalSpread fixedpoint.Value  `json:"totalSpread" db:"total_spread"`
+}
+
+func (w *WindowBase) AvgSpread() (spread fixedpoint.Value) {
+	if w.TickCount == 0 {
+		return fixedpoint.Zero
+	}
+	return w.TotalSpread.Div(fixedpoint.NewFromInt(int64(w.TickCount)))
 }
 
 func (w *WindowBase) Update(ticker *types.BookTicker) {
@@ -35,6 +43,51 @@ func (w *WindowBase) Update(ticker *types.BookTicker) {
 	w.High = fixedpoint.Max(w.High, ticker.Buy)
 	w.Low = fixedpoint.Min(w.Low, ticker.Sell)
 	w.TickCount++
+	w.TotalSpread = w.TotalSpread.Add(ticker.Sell.Sub(ticker.Buy))
+}
+
+func (w *WindowBase) AppendAfter(afterWindow *WindowBase) *WindowBase {
+	if w.IsEmpty() {
+		return afterWindow
+	}
+	if afterWindow.IsEmpty() {
+		return w
+	}
+	appendedWindow := NewWindowBase()
+	appendedWindow.StartTime = w.StartTime
+	appendedWindow.EndTime = afterWindow.EndTime
+	appendedWindow.Open = w.Open
+	appendedWindow.Close = afterWindow.Close
+	appendedWindow.High = fixedpoint.Max(w.High, afterWindow.High)
+	appendedWindow.Low = fixedpoint.Min(w.Low, afterWindow.Low)
+	appendedWindow.TickCount = w.TickCount + afterWindow.TickCount
+	appendedWindow.IsClosed = afterWindow.IsClosed
+	appendedWindow.TotalSpread = w.TotalSpread.Add(afterWindow.TotalSpread)
+	return appendedWindow
+}
+
+func (w *WindowBase) AppendBefore(beforeWindow *WindowBase) *WindowBase {
+	if beforeWindow.IsEmpty() {
+		return w
+	}
+	if w.IsEmpty() {
+		return beforeWindow
+	}
+	appendedWindow := NewWindowBase()
+	appendedWindow.StartTime = beforeWindow.StartTime
+	appendedWindow.EndTime = w.EndTime
+	appendedWindow.Open = beforeWindow.Open
+	appendedWindow.Close = w.Close
+	appendedWindow.High = fixedpoint.Max(w.High, beforeWindow.High)
+	appendedWindow.Low = fixedpoint.Min(w.Low, beforeWindow.Low)
+	appendedWindow.TickCount = w.TickCount + beforeWindow.TickCount
+	appendedWindow.IsClosed = w.IsClosed
+	appendedWindow.TotalSpread = w.TotalSpread.Add(beforeWindow.TotalSpread)
+	return appendedWindow
+}
+
+func (w *WindowBase) IsEmpty() bool {
+	return w == nil || w.TickCount == 0
 }
 
 func NewWindowBase() *WindowBase {
@@ -85,6 +138,29 @@ func NewSecond(previous *Second) *Second {
 		WindowBase: NewWindowBase(),
 		Previous:   previous,
 	}
+}
+
+func (s *Second) GetWindow(from, to time.Time) *WindowBase {
+	if s == nil || s.IsEmpty() {
+		return nil
+	}
+	if s.StartTime.After(to) || s.EndTime.Before(from) {
+		return nil
+	}
+	if s.StartTime.After(from) && s.EndTime.Before(to) {
+		return s.WindowBase
+	}
+	w := NewWindowBase()
+	for _, trade := range s.Ticks {
+		if trade.TransactionTime.After(to) {
+			continue
+		}
+		if trade.TransactionTime.Before(from) {
+			continue
+		}
+		w.Update(trade)
+	}
+	return w
 }
 
 func (s *Second) GetFirstAndEnd(from time.Time, to time.Time, isLastCatchFrom, isLastCatchTo bool) (start, end *types.BookTicker, isRealStart, isRealEnd bool) {
@@ -170,6 +246,32 @@ func NewMinute(previous *Minute) *Minute {
 		WindowBase: NewWindowBase(),
 		Previous:   previous,
 	}
+}
+
+func (m *Minute) GetWindow(from, to time.Time) *WindowBase {
+	if m == nil || m.IsEmpty() {
+		return nil
+	}
+	if m.StartTime.After(to) || m.EndTime.Before(from) {
+		return nil
+	}
+	if m.StartTime.After(from) && m.EndTime.Before(to) {
+		return m.WindowBase
+	}
+	w := NewWindowBase()
+	for _, sec := range m.Seconds {
+		if sec == nil || sec.IsEmpty() {
+			continue
+		}
+		if sec.StartTime.After(to) {
+			continue
+		}
+		if sec.EndTime.Before(from) {
+			continue
+		}
+		w = w.AppendAfter(sec.GetWindow(from, to))
+	}
+	return w
 }
 
 func (m *Minute) GetFirstAndEnd(from time.Time, to time.Time, isLastCatchFrom, isLastCatchTo bool) (start, end *types.BookTicker, isRealStart, isRealEnd bool) {
@@ -314,6 +416,32 @@ func NewHour(previous *Hour) *Hour {
 	}
 }
 
+func (h *Hour) GetWindow(from, to time.Time) *WindowBase {
+	if h == nil || h.IsEmpty() {
+		return nil
+	}
+	if h.StartTime.After(to) || h.EndTime.Before(from) {
+		return nil
+	}
+	if h.StartTime.After(from) && h.EndTime.Before(to) {
+		return h.WindowBase
+	}
+	w := NewWindowBase()
+	for _, minute := range h.Minutes {
+		if minute == nil || minute.IsEmpty() {
+			continue
+		}
+		if minute.StartTime.After(to) {
+			continue
+		}
+		if minute.EndTime.Before(from) {
+			continue
+		}
+		w = w.AppendAfter(minute.GetWindow(from, to))
+	}
+	return w
+}
+
 func (h *Hour) GetFirstAndEnd(from time.Time, to time.Time, isLastCatchFrom, isLastCatchTo bool) (start, end *types.BookTicker, isRealStart, isRealEnd bool) {
 	if h == nil {
 		return nil, nil, false, false
@@ -447,6 +575,33 @@ func NewDay(previous *Day) *Day {
 		WindowBase: NewWindowBase(),
 		Previous:   previous,
 	}
+}
+
+func (d *Day) GetWindow(from, to time.Time) *WindowBase {
+	if d == nil || d.IsEmpty() {
+		return nil
+	}
+	if d.StartTime.After(to) || d.EndTime.Before(from) {
+		return nil
+
+	}
+	if d.StartTime.After(from) && d.EndTime.Before(to) {
+		return d.WindowBase
+	}
+	w := NewWindowBase()
+	for _, hour := range d.Hours {
+		if hour == nil || hour.IsEmpty() {
+			continue
+		}
+		if hour.StartTime.After(to) {
+			continue
+		}
+		if hour.EndTime.Before(from) {
+			continue
+		}
+		w = w.AppendAfter(hour.GetWindow(from, to))
+	}
+	return w
 }
 
 func (d *Day) GetFirstAndEnd(from time.Time, to time.Time, isLastCatchFrom, isLastCatchTo bool) (start, end *types.BookTicker, isRealStart, isRealEnd bool) {
@@ -605,6 +760,29 @@ func NewKline(maxHours int, influxConfig *config.InfluxDB, symbol string, exchan
 		Symbol:       symbol,
 		Exchange:     exchange,
 	}, nil
+}
+
+func (k *Kline) GetWindow(from time.Time, to time.Time) *WindowBase {
+	if k == nil {
+		return nil
+	}
+	if k.StartTime.After(to) || k.EndTime.Before(from) {
+		return nil
+	}
+	w := NewWindowBase()
+	for _, day := range k.Days {
+		if day == nil || day.IsEmpty() {
+			continue
+		}
+		if day.StartTime.After(to) {
+			continue
+		}
+		if day.EndTime.Before(from) {
+			continue
+		}
+		w = w.AppendAfter(day.GetWindow(from, to))
+	}
+	return w
 }
 
 func (k *Kline) RemoveBefore(t time.Time) {

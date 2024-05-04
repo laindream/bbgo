@@ -119,19 +119,24 @@ func (slice PriceVolumeSlice) IndexByVolumeDepth(requiredVolume fixedpoint.Value
 	return -1
 }
 
-func (slice PriceVolumeSlice) InsertAt(idx int, pv PriceVolume) PriceVolumeSlice {
-	rear := append([]PriceVolume{}, slice[idx:]...)
-	newSlice := append(slice[:idx], pv)
-	return append(newSlice, rear...)
+func (slice *PriceVolumeSlice) InsertAt(idx int, pv PriceVolume) PriceVolumeSlice {
+	*slice = append(*slice, PriceVolume{})
+	if idx < len(*slice)-1 {
+		copy((*slice)[idx+1:], (*slice)[idx:len(*slice)-1])
+	}
+	(*slice)[idx] = pv
+	return *slice
 }
 
-func (slice PriceVolumeSlice) Remove(price fixedpoint.Value, descending bool) PriceVolumeSlice {
-	matched, idx := slice.Find(price, descending)
+func (slice *PriceVolumeSlice) Remove(price fixedpoint.Value, descending bool) PriceVolumeSlice {
+	matched, idx := (*slice).Find(price, descending)
 	if matched.Price.Compare(price) != 0 || matched.Price.IsZero() {
-		return slice
+		return *slice
 	}
-
-	return append(slice[:idx], slice[idx+1:]...)
+	// Shift elements to remove the index
+	copy((*slice)[idx:], (*slice)[idx+1:])
+	*slice = (*slice)[:len(*slice)-1]
+	return *slice
 }
 
 // Find finds the pair by the given price, this function is a read-only
@@ -155,19 +160,20 @@ func (slice PriceVolumeSlice) Find(price fixedpoint.Value, descending bool) (pv 
 	return pv, idx
 }
 
-func (slice PriceVolumeSlice) Upsert(pv PriceVolume, descending bool) PriceVolumeSlice {
-	if len(slice) == 0 {
-		return append(slice, pv)
+func (slice *PriceVolumeSlice) Upsert(pv PriceVolume, descending bool) PriceVolumeSlice {
+	if len(*slice) == 0 {
+		*slice = append(*slice, pv)
+		return *slice
 	}
 
 	price := pv.Price
 	_, idx := slice.Find(price, descending)
-	if idx >= len(slice) || slice[idx].Price.Compare(price) != 0 {
+	if idx >= len(*slice) || (*slice)[idx].Price.Compare(price) != 0 {
 		return slice.InsertAt(idx, pv)
 	}
 
-	slice[idx].Volume = pv.Volume
-	return slice
+	(*slice)[idx].Volume = pv.Volume
+	return *slice
 }
 
 func (slice *PriceVolumeSlice) UnmarshalJSON(b []byte) error {

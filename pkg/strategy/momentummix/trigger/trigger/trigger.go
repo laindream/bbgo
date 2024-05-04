@@ -1,6 +1,7 @@
 package trigger
 
 import (
+	"github.com/c9s/bbgo/pkg/bbgo"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/history"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/aggtrade"
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/tick"
@@ -35,6 +36,7 @@ type QuoteQuantityExceedTrigger struct {
 	TickKline *tick.Kline
 	AggKline  *aggtrade.Kline
 	Fee       types.ExchangeFee
+	Session   *bbgo.ExchangeSession
 
 	MinTriggerWindowTradeCount int
 	MaxTriggerWindowTradeCount int

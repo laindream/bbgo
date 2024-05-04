@@ -42,7 +42,7 @@ func (s *Strategy) Init(ctx context.Context, session *bbgo.ExchangeSession) erro
 		return err
 	}
 	s.InitCapture(session)
-	s.InitQuoteQuantityExceedTrigger()
+	s.InitQuoteQuantityExceedTrigger(session)
 	return nil
 }
 
@@ -56,7 +56,7 @@ func (s *Strategy) GetAccountStatus(ctx context.Context, session *bbgo.ExchangeS
 
 var DefaultAdaptNearQuantityRate = 5.0
 
-func (s *Strategy) InitQuoteQuantityExceedTrigger() {
+func (s *Strategy) InitQuoteQuantityExceedTrigger(session *bbgo.ExchangeSession) {
 	s.QuoteQuantityExceedTriggers = make(map[string]*trigger.QuoteQuantityExceedTrigger)
 	for _, symbol := range s.Symbols {
 		trig := &trigger.QuoteQuantityExceedTrigger{
@@ -71,6 +71,7 @@ func (s *Strategy) InitQuoteQuantityExceedTrigger() {
 			History:                    s.HistoryMarketStats[symbol],
 			AggKline:                   s.AggKline[symbol],
 			TickKline:                  s.TickKline[symbol],
+			Session:                    session,
 			MinTriggerWindowTradeCount: 15,
 			MaxTriggerWindowTradeCount: 75,
 			MinKeepWindowTradeCount:    20,
