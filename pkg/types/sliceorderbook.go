@@ -18,6 +18,8 @@ type SliceOrderBook struct {
 	Symbol string
 	Bids   PriceVolumeSlice
 	Asks   PriceVolumeSlice
+	//BidsTree *PriceVolumeTree
+	//AsksTree *PriceVolumeTree
 	// Time represents the server time. If empty, it indicates that the server does not provide this information.
 	Time time.Time
 
@@ -138,6 +140,21 @@ func (b *SliceOrderBook) UpdateAsks(pvs PriceVolumeSlice) {
 			b.Asks.Upsert(pv, false)
 		}
 	}
+	//if b.Asks == nil {
+	//	b.AsksTree = NewPriceVolumeTree(false)
+	//}
+	//if b.AsksTree == nil {
+	//	b.AsksTree = NewPriceVolumeTree(false)
+	//	b.AsksTree.LoadPriceVolumeSlice(b.Asks)
+	//}
+	//for _, pv := range pvs {
+	//	if pv.Volume.IsZero() {
+	//		b.AsksTree.Remove(pv)
+	//	} else {
+	//		b.AsksTree.Set(pv)
+	//	}
+	//}
+	//b.Asks = b.AsksTree.GetPriceVolumeSlice()
 }
 
 func (b *SliceOrderBook) UpdateBids(pvs PriceVolumeSlice) {
@@ -148,6 +165,21 @@ func (b *SliceOrderBook) UpdateBids(pvs PriceVolumeSlice) {
 			b.Bids.Upsert(pv, true)
 		}
 	}
+	//if b.Bids == nil {
+	//	b.BidsTree = NewPriceVolumeTree(true)
+	//}
+	//if b.BidsTree == nil {
+	//	b.BidsTree = NewPriceVolumeTree(true)
+	//	b.BidsTree.LoadPriceVolumeSlice(b.Bids)
+	//}
+	//for _, pv := range pvs {
+	//	if pv.Volume.IsZero() {
+	//		b.BidsTree.Remove(pv)
+	//	} else {
+	//		b.BidsTree.Set(pv)
+	//	}
+	//}
+	//b.Bids = b.BidsTree.GetPriceVolumeSlice()
 }
 
 func (b *SliceOrderBook) update(book SliceOrderBook) {
@@ -158,6 +190,8 @@ func (b *SliceOrderBook) update(book SliceOrderBook) {
 	} else {
 		b.lastUpdateTime = defaultTime(book.Time, time.Now)
 	}
+	//log.Infof("[%s][%s]book snapshot: bids: %d asks: %d", time.Now().Sub(b.LastUpdateTime()), book.Symbol, b.BidsTree.Tree.Size(), b.AsksTree.Tree.Size())
+	//log.Infof("[%s][%s]book snapshot: bids: %d asks: %d", time.Now().Sub(b.LastUpdateTime()), book.Symbol, len(b.Bids), len(b.Asks))
 }
 
 func (b *SliceOrderBook) Reset() {

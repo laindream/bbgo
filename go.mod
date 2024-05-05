@@ -16,6 +16,7 @@ require (
 	github.com/cenkalti/backoff/v4 v4.2.0
 	github.com/cheggaaa/pb/v3 v3.0.8
 	github.com/codingconcepts/env v0.0.0-20200821220118-a8fbf8d84482
+	github.com/emirpasic/gods v1.18.1
 	github.com/evanphx/json-patch/v5 v5.6.0
 	github.com/fatih/camelcase v1.0.0
 	github.com/fatih/color v1.14.1
