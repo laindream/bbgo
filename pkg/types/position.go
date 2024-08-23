@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/slack-go/slack"
 
 	"github.com/c9s/bbgo/pkg/fixedpoint"
@@ -19,16 +20,19 @@ const (
 	PositionClosed = PositionType("Closed")
 )
 
+// ExchangeFee stores the exchange fee rate
 type ExchangeFee struct {
 	MakerFeeRate fixedpoint.Value
 	TakerFeeRate fixedpoint.Value
 }
 
+// PositionRisk stores the position risk data
 type PositionRisk struct {
-	Leverage         fixedpoint.Value `json:"leverage"`
-	LiquidationPrice fixedpoint.Value `json:"liquidationPrice"`
+	Leverage         fixedpoint.Value `json:"leverage,omitempty"`
+	LiquidationPrice fixedpoint.Value `json:"liquidationPrice,omitempty"`
 }
 
+// Position stores the position data
 type Position struct {
 	Symbol        string `json:"symbol" db:"symbol"`
 	BaseCurrency  string `json:"baseCurrency" db:"base"`
@@ -40,15 +44,15 @@ type Position struct {
 	Quote       fixedpoint.Value `json:"quote" db:"quote"`
 	AverageCost fixedpoint.Value `json:"averageCost" db:"average_cost"`
 
-	// ApproximateAverageCost adds the computed fee in quote in the average cost
-	// This is used for calculating net profit
-	ApproximateAverageCost fixedpoint.Value `json:"approximateAverageCost"`
-
 	FeeRate          *ExchangeFee                 `json:"feeRate,omitempty"`
 	ExchangeFeeRates map[ExchangeName]ExchangeFee `json:"exchangeFeeRates"`
 
 	// TotalFee stores the fee currency -> total fee quantity
 	TotalFee map[string]fixedpoint.Value `json:"totalFee" db:"-"`
+
+	// FeeAverageCosts stores the fee currency -> average cost of the fee
+	// e.g. BNB -> 341.0
+	FeeAverageCosts map[string]fixedpoint.Value `json:"feeAverageCosts" db:"-"`
 
 	OpenedAt  time.Time `json:"openedAt,omitempty" db:"-"`
 	ChangedAt time.Time `json:"changedAt,omitempty" db:"changed_at"`
@@ -187,6 +191,7 @@ func (p *Position) NewMarketCloseOrder(percentage fixedpoint.Value) *SubmitOrder
 	}
 }
 
+// IsDust checks if the position is dust, the first argument is the price to calculate the dust quantity
 func (p *Position) IsDust(a ...fixedpoint.Value) bool {
 	price := p.AverageCost
 	if len(a) > 0 {
@@ -273,16 +278,18 @@ type FuturesPosition struct {
 	Quote       fixedpoint.Value `json:"quote"`
 	AverageCost fixedpoint.Value `json:"averageCost"`
 
-	// ApproximateAverageCost adds the computed fee in quote in the average cost
-	// This is used for calculating net profit
-	ApproximateAverageCost fixedpoint.Value `json:"approximateAverageCost"`
-
 	FeeRate          *ExchangeFee                 `json:"feeRate,omitempty"`
 	ExchangeFeeRates map[ExchangeName]ExchangeFee `json:"exchangeFeeRates"`
 
 	// Futures data fields
-	Isolated     bool  `json:"isolated"`
-	UpdateTime   int64 `json:"updateTime"`
+	// -------------------
+	// Isolated margin mode
+	Isolated bool `json:"isolated"`
+
+	// UpdateTime is the time when the position is updated
+	UpdateTime int64 `json:"updateTime"`
+
+	// PositionRisk stores the position risk data
 	PositionRisk *PositionRisk
 }
 
@@ -296,7 +303,10 @@ func NewPositionFromMarket(market Market) *Position {
 		BaseCurrency:  market.BaseCurrency,
 		QuoteCurrency: market.QuoteCurrency,
 		Market:        market,
-		TotalFee:      make(map[string]fixedpoint.Value),
+
+		FeeAverageCosts:  make(map[string]fixedpoint.Value),
+		TotalFee:         make(map[string]fixedpoint.Value),
+		ExchangeFeeRates: make(map[ExchangeName]ExchangeFee),
 	}
 }
 
@@ -305,7 +315,10 @@ func NewPosition(symbol, base, quote string) *Position {
 		Symbol:        symbol,
 		BaseCurrency:  base,
 		QuoteCurrency: quote,
-		TotalFee:      make(map[string]fixedpoint.Value),
+
+		TotalFee:         make(map[string]fixedpoint.Value),
+		FeeAverageCosts:  make(map[string]fixedpoint.Value),
+		ExchangeFeeRates: make(map[ExchangeName]ExchangeFee),
 	}
 }
 
@@ -333,6 +346,10 @@ func (p *Position) SetExchangeFeeRate(ex ExchangeName, exchangeFee ExchangeFee) 
 	}
 
 	p.ExchangeFeeRates[ex] = exchangeFee
+}
+
+func (p *Position) SetFeeAverageCost(currency string, cost fixedpoint.Value) {
+	p.FeeAverageCosts[currency] = cost
 }
 
 func (p *Position) IsShort() bool {
@@ -439,6 +456,7 @@ func (p *Position) String() string {
 	)
 }
 
+// BindStream binds the trade update callback and update the position
 func (p *Position) BindStream(stream Stream) {
 	stream.OnTradeUpdate(func(trade Trade) {
 		if p.Symbol == trade.Symbol {
@@ -478,6 +496,34 @@ func (p *Position) AddTrades(trades []Trade) (fixedpoint.Value, fixedpoint.Value
 	return totalProfitAmount, totalNetProfit, !totalProfitAmount.IsZero()
 }
 
+func (p *Position) calculateFeeInQuote(td Trade) fixedpoint.Value {
+	var quoteQuantity = td.QuoteQuantity
+
+	if cost, ok := p.FeeAverageCosts[td.FeeCurrency]; ok {
+		return td.Fee.Mul(cost)
+	}
+
+	if p.ExchangeFeeRates != nil {
+		if exchangeFee, ok := p.ExchangeFeeRates[td.Exchange]; ok {
+			if td.IsMaker {
+				return exchangeFee.MakerFeeRate.Mul(quoteQuantity)
+			} else {
+				return exchangeFee.TakerFeeRate.Mul(quoteQuantity)
+			}
+		}
+	}
+
+	if p.FeeRate != nil {
+		if td.IsMaker {
+			return p.FeeRate.MakerFeeRate.Mul(quoteQuantity)
+		} else {
+			return p.FeeRate.TakerFeeRate.Mul(quoteQuantity)
+		}
+	}
+
+	return fixedpoint.Zero
+}
+
 func (p *Position) AddTrade(td Trade) (profit fixedpoint.Value, netProfit fixedpoint.Value, madeProfit bool) {
 	price := td.Price
 	quantity := td.Quantity
@@ -491,6 +537,7 @@ func (p *Position) AddTrade(td Trade) (profit fixedpoint.Value, netProfit fixedp
 	switch td.FeeCurrency {
 
 	case p.BaseCurrency:
+		// USD-M futures use the quote currency as the fee currency.
 		if !td.IsFutures {
 			quantity = quantity.Sub(fee)
 		}
@@ -502,26 +549,14 @@ func (p *Position) AddTrade(td Trade) (profit fixedpoint.Value, netProfit fixedp
 
 	default:
 		if !td.Fee.IsZero() {
-			if p.ExchangeFeeRates != nil {
-				if exchangeFee, ok := p.ExchangeFeeRates[td.Exchange]; ok {
-					if td.IsMaker {
-						feeInQuote = feeInQuote.Add(exchangeFee.MakerFeeRate.Mul(quoteQuantity))
-					} else {
-						feeInQuote = feeInQuote.Add(exchangeFee.TakerFeeRate.Mul(quoteQuantity))
-					}
-				}
-			} else if p.FeeRate != nil {
-				if td.IsMaker {
-					feeInQuote = feeInQuote.Add(p.FeeRate.MakerFeeRate.Mul(quoteQuantity))
-				} else {
-					feeInQuote = feeInQuote.Add(p.FeeRate.TakerFeeRate.Mul(quoteQuantity))
-				}
-			}
+			feeInQuote = p.calculateFeeInQuote(td)
 		}
 	}
 
 	p.Lock()
 	defer p.Unlock()
+
+	defer p.updateMetrics()
 
 	// update changedAt field before we unlock in the defer func
 	defer func() {
@@ -531,7 +566,7 @@ func (p *Position) AddTrade(td Trade) (profit fixedpoint.Value, netProfit fixedp
 	p.addTradeFee(td)
 
 	// Base > 0 means we're in long position
-	// Base < 0  means we're in short position
+	// Base < 0 means we're in short position
 	switch td.Side {
 
 	case SideTypeBuy:
@@ -540,11 +575,10 @@ func (p *Position) AddTrade(td Trade) (profit fixedpoint.Value, netProfit fixedp
 			// convert short position to long position
 			if p.Base.Add(quantity).Sign() > 0 {
 				profit = p.AverageCost.Sub(price).Mul(p.Base.Neg())
-				netProfit = p.ApproximateAverageCost.Sub(price).Mul(p.Base.Neg()).Sub(feeInQuote)
+				netProfit = p.AverageCost.Sub(price).Mul(p.Base.Neg()).Sub(feeInQuote)
 				p.Base = p.Base.Add(quantity)
 				p.Quote = p.Quote.Sub(quoteQuantity)
 				p.AverageCost = price
-				p.ApproximateAverageCost = price
 				p.AccumulatedProfit = p.AccumulatedProfit.Add(profit)
 				p.OpenedAt = td.Time.Time()
 				return profit, netProfit, true
@@ -553,7 +587,7 @@ func (p *Position) AddTrade(td Trade) (profit fixedpoint.Value, netProfit fixedp
 				p.Base = p.Base.Add(quantity)
 				p.Quote = p.Quote.Sub(quoteQuantity)
 				profit = p.AverageCost.Sub(price).Mul(quantity)
-				netProfit = p.ApproximateAverageCost.Sub(price).Mul(quantity).Sub(feeInQuote)
+				netProfit = p.AverageCost.Sub(price).Mul(quantity).Sub(feeInQuote)
 				p.AccumulatedProfit = p.AccumulatedProfit.Add(profit)
 				return profit, netProfit, true
 			}
@@ -567,11 +601,12 @@ func (p *Position) AddTrade(td Trade) (profit fixedpoint.Value, netProfit fixedp
 
 		// here the case is: base == 0 or base > 0
 		divisor := p.Base.Add(quantity)
-		p.ApproximateAverageCost = p.ApproximateAverageCost.Mul(p.Base).
+
+		p.AverageCost = p.AverageCost.Mul(p.Base).
 			Add(quoteQuantity).
 			Add(feeInQuote).
 			Div(divisor)
-		p.AverageCost = p.AverageCost.Mul(p.Base).Add(quoteQuantity).Div(divisor)
+
 		p.Base = p.Base.Add(quantity)
 		p.Quote = p.Quote.Sub(quoteQuantity)
 		return fixedpoint.Zero, fixedpoint.Zero, false
@@ -582,11 +617,10 @@ func (p *Position) AddTrade(td Trade) (profit fixedpoint.Value, netProfit fixedp
 			// convert long position to short position
 			if p.Base.Compare(quantity) < 0 {
 				profit = price.Sub(p.AverageCost).Mul(p.Base)
-				netProfit = price.Sub(p.ApproximateAverageCost).Mul(p.Base).Sub(feeInQuote)
+				netProfit = price.Sub(p.AverageCost).Mul(p.Base).Sub(feeInQuote)
 				p.Base = p.Base.Sub(quantity)
 				p.Quote = p.Quote.Add(quoteQuantity)
 				p.AverageCost = price
-				p.ApproximateAverageCost = price
 				p.AccumulatedProfit = p.AccumulatedProfit.Add(profit)
 				p.OpenedAt = td.Time.Time()
 				return profit, netProfit, true
@@ -594,7 +628,7 @@ func (p *Position) AddTrade(td Trade) (profit fixedpoint.Value, netProfit fixedp
 				p.Base = p.Base.Sub(quantity)
 				p.Quote = p.Quote.Add(quoteQuantity)
 				profit = price.Sub(p.AverageCost).Mul(quantity)
-				netProfit = price.Sub(p.ApproximateAverageCost).Mul(quantity).Sub(feeInQuote)
+				netProfit = price.Sub(p.AverageCost).Mul(quantity).Sub(feeInQuote)
 				p.AccumulatedProfit = p.AccumulatedProfit.Add(profit)
 				return profit, netProfit, true
 			}
@@ -608,13 +642,10 @@ func (p *Position) AddTrade(td Trade) (profit fixedpoint.Value, netProfit fixedp
 
 		// handling short position, since Base here is negative we need to reverse the sign
 		divisor := quantity.Sub(p.Base)
-		p.ApproximateAverageCost = p.ApproximateAverageCost.Mul(p.Base.Neg()).
-			Add(quoteQuantity).
-			Sub(feeInQuote).
-			Div(divisor)
 
 		p.AverageCost = p.AverageCost.Mul(p.Base.Neg()).
 			Add(quoteQuantity).
+			Sub(feeInQuote).
 			Div(divisor)
 		p.Base = p.Base.Sub(quantity)
 		p.Quote = p.Quote.Add(quoteQuantity)
@@ -623,4 +654,20 @@ func (p *Position) AddTrade(td Trade) (profit fixedpoint.Value, netProfit fixedp
 	}
 
 	return fixedpoint.Zero, fixedpoint.Zero, false
+}
+
+func (p *Position) updateMetrics() {
+	// update the position metrics only if the position defines the strategy ID
+	if p.StrategyInstanceID == "" || p.Strategy == "" {
+		return
+	}
+
+	labels := prometheus.Labels{
+		"strategy_id":   p.StrategyInstanceID,
+		"strategy_type": p.Strategy,
+		"symbol":        p.Symbol,
+	}
+	positionAverageCostMetrics.With(labels).Set(p.AverageCost.Float64())
+	positionBaseQuantityMetrics.With(labels).Set(p.Base.Float64())
+	positionQuoteQuantityMetrics.With(labels).Set(p.Quote.Float64())
 }

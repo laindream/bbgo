@@ -196,6 +196,9 @@ func (s *Stream) subscribePrivateChannels(next func()) func() {
 			{Channel: "orders", InstrumentType: string(okexapi.InstrumentTypeSpot)},
 		}
 
+		// https://www.okx.com/docs-v5/zh/#overview-websocket-connect
+		// **NOTICE** 2024/06/03 Since the number of channels we are currently subscribed to is far less
+		// than the rate limit of 20, rate limiting is not supported for now.
 		log.Infof("subscribing private channels: %+v", subs)
 		err := s.Conn.WriteJSON(WebsocketOp{
 			Op:   "subscribe",
@@ -303,7 +306,7 @@ func (s *Stream) dispatchEvent(e interface{}) {
 
 	case *BookEvent:
 		// there's "books" for 400 depth and books5 for 5 depth
-		if et.channel != ChannelBook5 {
+		if et.channel != ChannelBooks5 {
 			s.EmitBookEvent(*et)
 		}
 		s.EmitBookTickerUpdate(et.BookTicker())

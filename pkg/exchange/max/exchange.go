@@ -649,8 +649,11 @@ func (e *Exchange) SubmitOrder(ctx context.Context, order types.SubmitOrder) (cr
 	req.Market(toLocalSymbol(o.Symbol)).
 		Side(toLocalSideType(o.Side)).
 		Volume(quantityString).
-		OrderType(orderType).
-		ClientOrderID(clientOrderID)
+		OrderType(orderType)
+
+	if clientOrderID != "" {
+		req.ClientOrderID(clientOrderID)
+	}
 
 	if o.GroupID > 0 {
 		req.GroupID(strconv.FormatUint(uint64(o.GroupID%math.MaxInt32), 10))
@@ -825,8 +828,7 @@ func (e *Exchange) QueryWithdrawHistory(
 	limit := 1000
 	txIDs := map[string]struct{}{}
 
-	emptyTime := time.Time{}
-	if startTime == emptyTime {
+	if startTime.IsZero() {
 		startTime, err = e.getLaunchDate()
 		if err != nil {
 			return nil, err
@@ -847,8 +849,8 @@ func (e *Exchange) QueryWithdrawHistory(
 		}
 
 		withdraws, err := req.
-			From(startTime).
-			To(endTime).
+			Timestamp(startTime).
+			Order("asc").
 			Limit(limit).
 			Do(ctx)
 
@@ -867,24 +869,7 @@ func (e *Exchange) QueryWithdrawHistory(
 				continue
 			}
 
-			// we can convert this later
-			status := d.State
-			switch d.State {
-
-			case "confirmed":
-				status = "completed" // make it compatible with binance
-
-			case "submitting", "submitted", "accepted",
-				"rejected", "suspect", "approved", "delisted_processing",
-				"processing", "retryable", "sent", "canceled",
-				"failed", "pending",
-				"kgi_manually_processing", "kgi_manually_confirmed", "kgi_possible_failed",
-				"sygna_verifying":
-
-			default:
-				status = d.State
-
-			}
+			status := convertWithdrawStatusV2(d.State)
 
 			txIDs[d.TxID] = struct{}{}
 			withdraw := types.Withdraw{
@@ -892,15 +877,16 @@ func (e *Exchange) QueryWithdrawHistory(
 				ApplyTime:              types.Time(d.CreatedAt),
 				Asset:                  toGlobalCurrency(d.Currency),
 				Amount:                 d.Amount,
-				Address:                "",
+				Address:                d.Address,
 				AddressTag:             "",
 				TransactionID:          d.TxID,
 				TransactionFee:         d.Fee,
 				TransactionFeeCurrency: d.FeeCurrency,
-				// WithdrawOrderID: d.WithdrawOrderID,
-				// Network:         d.Network,
-				Status: status,
+				Network:                d.NetworkProtocol,
+				Status:                 status,
+				OriginalStatus:         string(d.State),
 			}
+
 			allWithdraws = append(allWithdraws, withdraw)
 		}
 
@@ -946,8 +932,8 @@ func (e *Exchange) QueryDepositHistory(
 		}
 
 		deposits, err := req.
-			From(startTime).
-			To(endTime).
+			Timestamp(startTime).
+			Order("asc").
 			Limit(limit).
 			Do(ctx)
 
@@ -986,15 +972,10 @@ func (e *Exchange) QueryDepositHistory(
 
 // QueryTrades
 // For MAX API spec
-// start_time and end_time need to be within 3 days
-// without any parameters      -> return trades within 24 hours
-// give start_time or end_time -> ignore parameter from_id
-// give start_time or from_id  -> order by time asc
-// give end_time               -> order by time desc
+// give from_id -> query trades from this id and order by asc
+// give timestamp and order is asc -> query trades after timestamp and order by asc
+// give timestamp and order is desc -> query trades before timestamp and order by desc
 // limit should b1 1~1000
-// For this QueryTrades spec (to be compatible with batch.TradeBatchQuery)
-// give LastTradeID       -> ignore start_time (but still can filter the end_time)
-// without any parameters -> return trades within 24 hours
 func (e *Exchange) QueryTrades(
 	ctx context.Context, symbol string, options *types.TradeQueryOptions,
 ) (trades []types.Trade, err error) {
@@ -1021,23 +1002,15 @@ func (e *Exchange) QueryTrades(
 	// However, we want to use from_id as main parameter for batch.TradeBatchQuery
 	if options.LastTradeID > 0 {
 		// MAX uses inclusive last trade ID
-		req.From(options.LastTradeID)
+		req.FromID(options.LastTradeID)
+		req.Order("asc")
 	} else {
-		// option's start_time and end_time need to be within 3 days
-		// so if the start_time and end_time is over 3 days, we make end_time down to start_time + 3 days
-		if options.StartTime != nil && options.EndTime != nil {
-			endTime := *options.EndTime
-			startTime := *options.StartTime
-			if endTime.Sub(startTime) > 72*time.Hour {
-				startTime := *options.StartTime
-				endTime = startTime.Add(72 * time.Hour)
-			}
-			req.StartTime(startTime)
-			req.EndTime(endTime)
-		} else if options.StartTime != nil {
-			req.StartTime(*options.StartTime)
+		if options.StartTime != nil {
+			req.Timestamp(*options.StartTime)
+			req.Order("asc")
 		} else if options.EndTime != nil {
-			req.EndTime(*options.EndTime)
+			req.Timestamp(*options.EndTime)
+			req.Order("desc")
 		}
 	}
 
@@ -1047,6 +1020,14 @@ func (e *Exchange) QueryTrades(
 	}
 
 	for _, t := range maxTrades {
+		if options.StartTime != nil && options.StartTime.After(t.CreatedAt.Time()) {
+			continue
+		}
+
+		if options.EndTime != nil && options.EndTime.Before(t.CreatedAt.Time()) {
+			continue
+		}
+
 		localTrades, err := toGlobalTradeV3(t)
 		if err != nil {
 			log.WithError(err).Errorf("can not convert trade: %+v", t)

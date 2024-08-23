@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -32,7 +33,11 @@ type QueryTradesOptions struct {
 
 	// ASC or DESC
 	Ordering string
-	Limit    uint64
+
+	// OrderByColumn is the column name to order by
+	// Currently we only support traded_at and gid column.
+	OrderByColumn string
+	Limit         uint64
 }
 
 type TradingVolume struct {
@@ -58,7 +63,11 @@ func NewTradeService(db *sqlx.DB) *TradeService {
 	return &TradeService{db}
 }
 
-func (s *TradeService) Sync(ctx context.Context, exchange types.Exchange, symbol string, startTime time.Time) error {
+func (s *TradeService) Sync(
+	ctx context.Context,
+	exchange types.Exchange, symbol string,
+	startTime, endTime time.Time,
+) error {
 	isMargin, isFutures, isIsolated, isolatedSymbol := exchange2.GetSessionAttributes(exchange)
 	// override symbol if isolatedSymbol is not empty
 	if isIsolated && len(isolatedSymbol) > 0 {
@@ -106,7 +115,7 @@ func (s *TradeService) Sync(ctx context.Context, exchange types.Exchange, symbol
 	}
 
 	for _, sel := range tasks {
-		if err := sel.execute(ctx, s.DB, startTime); err != nil {
+		if err := sel.execute(ctx, s.DB, startTime, endTime); err != nil {
 			return err
 		}
 	}
@@ -300,11 +309,28 @@ func (s *TradeService) Query(options QueryTradesOptions) ([]types.Trade, error) 
 		sel = sel.Where(sq.Eq{"exchange": options.Sessions})
 	}
 
-	if options.Ordering != "" {
-		sel = sel.OrderBy("traded_at " + options.Ordering)
-	} else {
-		sel = sel.OrderBy("traded_at ASC")
+	var orderByColumn string
+	switch options.OrderByColumn {
+	case "":
+		orderByColumn = "traded_at"
+	case "traded_at", "gid":
+		orderByColumn = options.OrderByColumn
+	default:
+		return nil, fmt.Errorf("invalid order by column: %s", options.OrderByColumn)
 	}
+
+	var ordering string
+
+	switch strings.ToUpper(options.Ordering) {
+	case "":
+		ordering = "ASC"
+	case "ASC", "DESC":
+		ordering = strings.ToUpper(options.Ordering)
+	default:
+		return nil, fmt.Errorf("invalid ordering: %s", options.Ordering)
+	}
+
+	sel = sel.OrderBy(orderByColumn + " " + ordering)
 
 	if options.Limit > 0 {
 		sel = sel.Limit(options.Limit)
@@ -331,7 +357,7 @@ func (s *TradeService) Query(options QueryTradesOptions) ([]types.Trade, error) 
 func (s *TradeService) Load(ctx context.Context, id int64) (*types.Trade, error) {
 	var trade types.Trade
 
-	rows, err := s.DB.NamedQuery("SELECT * FROM trades WHERE id = :id", map[string]interface{}{
+	rows, err := s.DB.NamedQueryContext(ctx, "SELECT * FROM trades WHERE id = :id", map[string]interface{}{
 		"id": id,
 	})
 	if err != nil {

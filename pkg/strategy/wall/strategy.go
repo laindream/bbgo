@@ -65,7 +65,9 @@ type Strategy struct {
 }
 
 func (s *Strategy) Initialize() error {
-	s.Strategy = &common.Strategy{}
+	if s.Strategy == nil {
+		s.Strategy = &common.Strategy{}
+	}
 	return nil
 }
 
@@ -333,6 +335,8 @@ func (s *Strategy) Run(ctx context.Context, _ bbgo.OrderExecutor, session *bbgo.
 
 		// check if there is a canceled order had partially filled.
 		s.OrderExecutor.TradeCollector().Process()
+
+		bbgo.Sync(ctx, s)
 	})
 
 	return nil

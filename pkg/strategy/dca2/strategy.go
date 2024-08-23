@@ -63,7 +63,8 @@ type Strategy struct {
 	CoolDownInterval types.Duration   `json:"coolDownInterval"`
 
 	// OrderGroupID is the group ID used for the strategy instance for canceling orders
-	OrderGroupID uint32 `json:"orderGroupID"`
+	OrderGroupID              uint32 `json:"orderGroupID"`
+	DisableOrderGroupIDFilter bool   `json:"disableOrderGroupIDFilter"`
 
 	// RecoverWhenStart option is used for recovering dca states
 	RecoverWhenStart          bool `json:"recoverWhenStart"`
@@ -76,11 +77,8 @@ type Strategy struct {
 	// KeepOrdersWhenShutdown option is used for keeping the grid orders when shutting down bbgo
 	KeepOrdersWhenShutdown bool `json:"keepOrdersWhenShutdown"`
 
-	// UseCancelAllOrdersApiWhenClose uses a different API to cancel all the orders on the market when closing a grid
-	UseCancelAllOrdersApiWhenClose bool `json:"useCancelAllOrdersApiWhenClose"`
-
-	// dev mode
-	DevMode *DevMode `json:"devMode"`
+	// UniversalCancelAllOrdersWhenClose close all orders even though the orders don't belong to this strategy
+	UniversalCancelAllOrdersWhenClose bool `json:"universalCancelAllOrdersWhenClose"`
 
 	// log
 	logger    *logrus.Entry
@@ -93,16 +91,15 @@ type Strategy struct {
 	mu                   sync.Mutex
 	nextStateC           chan State
 	state                State
-	roundCollector       *RoundCollector
-	orderQueryService    types.ExchangeOrderQueryService
+	collector            *Collector
 	takeProfitPrice      fixedpoint.Value
 	startTimeOfNextRound time.Time
 	nextRoundPaused      bool
 
 	// callbacks
 	common.StatusCallbacks
-	positionCallbacks []func(*types.Position)
-	profitCallbacks   []func(*ProfitStats)
+	profitCallbacks         []func(*ProfitStats)
+	positionUpdateCallbacks []func(*types.Position)
 }
 
 func (s *Strategy) ID() string {
@@ -180,12 +177,6 @@ func (s *Strategy) Run(ctx context.Context, _ bbgo.OrderExecutor, session *bbgo.
 		s.Position = types.NewPositionFromMarket(s.Market)
 	}
 
-	// if dev mode is on and it's not a new strategy
-	if s.DevMode != nil && s.DevMode.Enabled && !s.DevMode.IsNewAccount {
-		s.ProfitStats = newProfitStats(s.Market, s.QuoteInvestment)
-		s.Position = types.NewPositionFromMarket(s.Market)
-	}
-
 	// set ttl for persistence
 	s.Position.SetTTL(s.PersistenceTTL.Duration())
 	s.ProfitStats.SetTTL(s.PersistenceTTL.Duration())
@@ -194,17 +185,10 @@ func (s *Strategy) Run(ctx context.Context, _ bbgo.OrderExecutor, session *bbgo.
 		s.OrderGroupID = util.FNV32(instanceID) % math.MaxInt32
 	}
 
-	// orderQueryService
-	if service, ok := s.ExchangeSession.Exchange.(types.ExchangeOrderQueryService); ok {
-		s.orderQueryService = service
-	} else {
-		return fmt.Errorf("exchange %s doesn't support ExchangeOrderQueryService", s.ExchangeSession.ExchangeName)
-	}
-
-	// round collector
-	s.roundCollector = NewRoundCollector(s.logger, s.Symbol, s.OrderGroupID, s.ExchangeSession.Exchange)
-	if s.roundCollector == nil {
-		return fmt.Errorf("failed to initialize round collector")
+	// collector
+	s.collector = NewCollector(s.logger, s.Symbol, s.OrderGroupID, !s.DisableOrderGroupIDFilter, s.ExchangeSession.Exchange)
+	if s.collector == nil {
+		return fmt.Errorf("failed to initialize collector")
 	}
 
 	// prometheus
@@ -227,6 +211,7 @@ func (s *Strategy) Run(ctx context.Context, _ bbgo.OrderExecutor, session *bbgo.
 	}
 
 	s.OrderExecutor = bbgo.NewGeneralOrderExecutor(session, s.Symbol, ID, instanceID, s.Position)
+	s.OrderExecutor.SetMaxRetries(50)
 	s.OrderExecutor.BindEnvironment(s.Environment)
 	s.OrderExecutor.Bind()
 
@@ -237,6 +222,9 @@ func (s *Strategy) Run(ctx context.Context, _ bbgo.OrderExecutor, session *bbgo.
 
 		// update take profit price here
 		s.updateTakeProfitPrice()
+
+		// emit position update
+		s.EmitPositionUpdate(position)
 	})
 
 	s.OrderExecutor.ActiveMakerOrders().OnFilled(func(o types.Order) {
@@ -275,18 +263,23 @@ func (s *Strategy) Run(ctx context.Context, _ bbgo.OrderExecutor, session *bbgo.
 	})
 
 	session.MarketDataStream.OnKLine(func(kline types.KLine) {
-		// check price here
-		if s.state != OpenPositionOrderFilled {
+		switch s.state {
+		case OpenPositionOrderFilled:
+			if s.takeProfitPrice.IsZero() {
+				s.logger.Warn("take profit price should not be 0 when there is at least one open-position order filled, please check it")
+				return
+			}
+
+			compRes := kline.Close.Compare(s.takeProfitPrice)
+			// price doesn't hit the take profit price
+			if compRes < 0 {
+				return
+			}
+
+			s.emitNextState(OpenPositionOrdersCancelling)
+		default:
 			return
 		}
-
-		compRes := kline.Close.Compare(s.takeProfitPrice)
-		// price doesn't hit the take profit price
-		if compRes < 0 {
-			return
-		}
-
-		s.emitNextState(OpenPositionOrdersCancelling)
 	})
 
 	session.UserDataStream.OnAuth(func() {
@@ -297,7 +290,7 @@ func (s *Strategy) Run(ctx context.Context, _ bbgo.OrderExecutor, session *bbgo.
 				// no need to recover when two situation
 				// 1. recoverWhenStart is false
 				// 2. dev mode is on and it's not new strategy
-				if !s.RecoverWhenStart || (s.DevMode != nil && s.DevMode.Enabled && !s.DevMode.IsNewAccount) {
+				if !s.RecoverWhenStart {
 					s.updateState(WaitToOpenPosition)
 				} else {
 					// recover
@@ -317,6 +310,9 @@ func (s *Strategy) Run(ctx context.Context, _ bbgo.OrderExecutor, session *bbgo.
 							s.logger.Errorf("failed to recover after %d trying, please check it", maxTry)
 							return
 						}
+
+						// sleep 10 second to retry the recovery
+						time.Sleep(10 * time.Second)
 					}
 				}
 
@@ -324,6 +320,9 @@ func (s *Strategy) Run(ctx context.Context, _ bbgo.OrderExecutor, session *bbgo.
 				s.logger.Infof("position %s", s.Position.String())
 				s.logger.Infof("profit stats %s", s.ProfitStats.String())
 				s.logger.Infof("startTimeOfNextRound %s", s.startTimeOfNextRound)
+
+				// emit position after recovery
+				s.OrderExecutor.TradeCollector().EmitPositionUpdate(s.Position)
 
 				s.updateTakeProfitPrice()
 
@@ -333,13 +332,19 @@ func (s *Strategy) Run(ctx context.Context, _ bbgo.OrderExecutor, session *bbgo.
 				// ready
 				s.EmitReady()
 
+				// start to sync periodically
+				go s.syncPeriodically(ctx)
+
+				// try to trigger position opening immediately
+				if s.state == WaitToOpenPosition {
+					s.emitNextState(PositionOpening)
+				}
+
 				// start running state machine
 				s.runState(ctx)
 			}
 		})
 	})
-
-	go s.runBackgroundTask(ctx)
 
 	bbgo.OnShutdown(ctx, func(ctx context.Context, wg *sync.WaitGroup) {
 		defer wg.Done()
@@ -368,9 +373,15 @@ func (s *Strategy) Close(ctx context.Context) error {
 
 	defer s.EmitClosed()
 
-	err := s.OrderExecutor.GracefulCancel(ctx)
+	var err error
+	if s.UniversalCancelAllOrdersWhenClose {
+		err = tradingutil.UniversalCancelAllOrders(ctx, s.ExchangeSession.Exchange, nil)
+	} else {
+		err = s.OrderExecutor.GracefulCancel(ctx)
+	}
+
 	if err != nil {
-		s.logger.WithError(err).Errorf("there are errors when cancelling orders at close")
+		s.logger.WithError(err).Errorf("there are errors when cancelling orders when closing (UniversalCancelAllOrdersWhenClose = %t)", s.UniversalCancelAllOrdersWhenClose)
 	}
 
 	bbgo.Sync(ctx, s)
@@ -452,14 +463,15 @@ func (s *Strategy) UpdateProfitStatsUntilSuccessful(ctx context.Context) error {
 // return false, nil -> there is no finished round!
 // return true, error -> At least one round update profit stats successfully but there is error when collecting other rounds
 func (s *Strategy) UpdateProfitStats(ctx context.Context) (bool, error) {
-	rounds, err := s.roundCollector.CollectFinishRounds(ctx, s.ProfitStats.FromOrderID)
+	s.logger.Info("update profit stats")
+	rounds, err := s.collector.CollectFinishRounds(ctx, s.ProfitStats.FromOrderID)
 	if err != nil {
 		return false, errors.Wrapf(err, "failed to collect finish rounds from #%d", s.ProfitStats.FromOrderID)
 	}
 
 	var updated bool = false
 	for _, round := range rounds {
-		trades, err := s.roundCollector.CollectRoundTrades(ctx, round)
+		trades, err := s.collector.CollectRoundTrades(ctx, round)
 		if err != nil {
 			return updated, errors.Wrapf(err, "failed to collect the trades of round")
 		}
@@ -470,7 +482,11 @@ func (s *Strategy) UpdateProfitStats(ctx context.Context) (bool, error) {
 		}
 
 		// update profit stats FromOrderID to make sure we will not collect duplicated rounds
-		s.ProfitStats.FromOrderID = round.TakeProfitOrder.OrderID + 1
+		for _, order := range round.TakeProfitOrders {
+			if order.OrderID >= s.ProfitStats.FromOrderID {
+				s.ProfitStats.FromOrderID = order.OrderID + 1
+			}
+		}
 
 		// update quote investment
 		s.ProfitStats.QuoteInvestment = s.ProfitStats.QuoteInvestment.Add(s.ProfitStats.CurrentRoundProfit)

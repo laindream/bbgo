@@ -14,8 +14,7 @@ func toGlobalSymbol(symbol string) string {
 	return strings.ReplaceAll(symbol, "-", "")
 }
 
-// //go:generate sh -c "echo \"package okex\nvar spotSymbolMap = map[string]string{\n\" $(curl -s -L 'https://okex.com/api/v5/public/instruments?instType=SPOT' | jq -r '.data[] | \"\\(.instId | sub(\"-\" ; \"\") | tojson ): \\( .instId | tojson),\n\"') \"\n}\" > symbols.go"
-//
+//go:generate sh -c "echo \"package okex\nvar spotSymbolMap = map[string]string{\n\" $(curl -s -L 'https://www.okx.com/api/v5/public/instruments?instType=SPOT' | jq -r '.data[] | \"\\(.instId | sub(\"-\" ; \"\") | tojson ): \\( .instId | tojson),\n\"') \"\n}\" > symbols.go"
 //go:generate go run gensymbols.go
 func toLocalSymbol(symbol string) string {
 	if s, ok := spotSymbolMap[symbol]; ok {
@@ -82,9 +81,6 @@ func convertIntervalToCandle(interval types.Interval) string {
 }
 
 func convertSubscription(s types.Subscription) (WebsocketSubscription, error) {
-	// binance uses lower case symbol name,
-	// for kline, it's "<symbol>@kline_<interval>"
-	// for depth, it's "<symbol>@depth OR <symbol>@depth@100ms"
 	switch s.Channel {
 	case types.KLineChannel:
 		// Channel names are:
@@ -94,17 +90,32 @@ func convertSubscription(s types.Subscription) (WebsocketSubscription, error) {
 		}, nil
 
 	case types.BookChannel:
-		if s.Options.Depth != types.DepthLevel400 {
-			return WebsocketSubscription{}, fmt.Errorf("%s depth not supported", s.Options.Depth)
+		ch := ChannelBooks
+
+		switch s.Options.Depth {
+		case types.DepthLevelFull:
+			ch = ChannelBooks
+
+		case types.DepthLevelMedium:
+			ch = ChannelBooks50
+
+		case types.DepthLevel50:
+			ch = ChannelBooks50
+
+		case types.DepthLevel5:
+			ch = ChannelBooks5
+
+		case types.DepthLevel1:
+			ch = ChannelBooks1
 		}
 
 		return WebsocketSubscription{
-			Channel:      ChannelBooks,
+			Channel:      ch,
 			InstrumentID: toLocalSymbol(s.Symbol),
 		}, nil
 	case types.BookTickerChannel:
 		return WebsocketSubscription{
-			Channel:      ChannelBook5,
+			Channel:      ChannelBooks5,
 			InstrumentID: toLocalSymbol(s.Symbol),
 		}, nil
 	case types.MarketTradeChannel:

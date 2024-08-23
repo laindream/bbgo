@@ -33,20 +33,15 @@ func (s *Strategy) placeOpenPositionOrders(ctx context.Context) error {
 
 	s.debugOrders(createdOrders)
 
-	if s.DevMode != nil && s.DevMode.Enabled && s.DevMode.IsNewAccount {
-		if len(createdOrders) > 0 {
-			s.ProfitStats.FromOrderID = createdOrders[0].OrderID
-		}
-
-		for _, createdOrder := range createdOrders {
-			if s.ProfitStats.FromOrderID > createdOrder.OrderID {
-				s.ProfitStats.FromOrderID = createdOrder.OrderID
-			}
-		}
-
-		s.DevMode.IsNewAccount = false
-		bbgo.Sync(ctx, s)
+	// store price quantity pairs into persistence
+	var pvs []types.PriceVolume
+	for _, createdOrder := range createdOrders {
+		pvs = append(pvs, types.PriceVolume{Price: createdOrder.Price, Volume: createdOrder.Quantity})
 	}
+
+	s.ProfitStats.OpenPositionPVs = pvs
+
+	bbgo.Sync(ctx, s)
 
 	return nil
 }

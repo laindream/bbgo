@@ -383,7 +383,7 @@ func (s *Strategy) verifyOrderTrades(o types.Order, trades []types.Trade) bool {
 	return true
 }
 
-// aggregateOrderQuoteAmountAndBaseFee collects the base fee quantity from the given order
+// aggregateOrderQuoteAmountAndFee collects the base fee quantity from the given order
 // it falls back to query the trades via the RESTful API when the websocket trades are not all received.
 func (s *Strategy) aggregateOrderQuoteAmountAndFee(o types.Order) (fixedpoint.Value, fixedpoint.Value, string) {
 	// try to get the received trades (websocket trades)
@@ -417,7 +417,7 @@ func (s *Strategy) aggregateOrderQuoteAmountAndFee(o types.Order) (fixedpoint.Va
 		s.logger.Warnf("GRID: missing #%d order trades or missing trade fee, pulling order trades from API", o.OrderID)
 
 		// if orderQueryService is supported, use it to query the trades of the filled order
-		apiOrderTrades, err := s.orderQueryService.QueryOrderTrades(context.Background(), types.OrderQuery{
+		apiOrderTrades, err := retry.QueryOrderTradesUntilSuccessful(context.Background(), s.orderQueryService, types.OrderQuery{
 			Symbol:  o.Symbol,
 			OrderID: strconv.FormatUint(o.OrderID, 10),
 		})
@@ -1993,7 +1993,7 @@ func (s *Strategy) Run(ctx context.Context, _ bbgo.OrderExecutor, session *bbgo.
 						return
 					}
 
-					s.recoverActiveOrdersPeriodically(ctx)
+					s.recoverPeriodically(ctx)
 				})
 			} else {
 				s.startProcess(ctx, session)
@@ -2008,12 +2008,14 @@ func (s *Strategy) startProcess(ctx context.Context, session *bbgo.ExchangeSessi
 	if s.RecoverOrdersWhenStart {
 		// do recover only when triggerPrice is not set and not in the back-test mode
 		s.logger.Infof("recoverWhenStart is set, trying to recover grid orders...")
-		if err := s.recoverGrid(ctx, session); err != nil {
+		if err := s.recover(ctx); err != nil {
 			// if recover fail, return and do not open grid
 			s.logger.WithError(err).Error("failed to start process, recover error")
 			s.EmitGridError(errors.Wrapf(err, "failed to start process, recover error"))
 			return err
 		}
+
+		s.EmitGridReady()
 	}
 
 	// avoid using goroutine here for back-test

@@ -224,20 +224,41 @@ func (m Market) AdjustQuantityByMinQuantity(quantity fixedpoint.Value) fixedpoin
 	return fixedpoint.Max(quantity, m.MinQuantity)
 }
 
+func (m Market) RoundUpByStepSize(quantity fixedpoint.Value) fixedpoint.Value {
+	ts := m.StepSize.Float64()
+	prec := int(math.Round(math.Log10(ts) * -1.0))
+	return quantity.Round(prec, fixedpoint.Up)
+}
+
 // AdjustQuantityByMinNotional adjusts the quantity to make the amount greater than the given minAmount
 func (m Market) AdjustQuantityByMinNotional(quantity, currentPrice fixedpoint.Value) fixedpoint.Value {
 	// modify quantity for the min amount
+	if quantity.IsZero() && m.MinNotional.Sign() > 0 {
+		return m.RoundUpByStepSize(m.MinNotional.Div(currentPrice))
+	}
+
 	amount := currentPrice.Mul(quantity)
 	if amount.Compare(m.MinNotional) < 0 {
 		ratio := m.MinNotional.Div(amount)
 		quantity = quantity.Mul(ratio)
 
-		ts := m.StepSize.Float64()
-		prec := int(math.Round(math.Log10(ts) * -1.0))
-		return quantity.Round(prec, fixedpoint.Up)
+		return m.RoundUpByStepSize(quantity)
 	}
 
 	return quantity
+}
+
+// AdjustQuantityByMaxAmount adjusts the quantity to make the amount less than the given maxAmount
+func (m Market) AdjustQuantityByMaxAmount(quantity, currentPrice, maxAmount fixedpoint.Value) fixedpoint.Value {
+	// modify quantity for the min amount
+	amount := currentPrice.Mul(quantity)
+	if amount.Compare(maxAmount) < 0 {
+		return quantity
+	}
+
+	ratio := maxAmount.Div(amount)
+	quantity = quantity.Mul(ratio)
+	return m.TruncateQuantity(quantity)
 }
 
 type MarketMap map[string]Market

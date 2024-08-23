@@ -21,7 +21,7 @@ const ID = "xgap"
 
 var log = logrus.WithField("strategy", ID)
 
-var StepPercentageGap = fixedpoint.NewFromFloat(0.05)
+var maxStepPercentageGap = fixedpoint.NewFromFloat(0.05)
 
 var Two = fixedpoint.NewFromInt(2)
 
@@ -37,29 +37,9 @@ func (s *Strategy) InstanceID() string {
 	return fmt.Sprintf("%s:%s", ID, s.Symbol)
 }
 
-type State struct {
-	AccumulatedFeeStartedAt time.Time                   `json:"accumulatedFeeStartedAt,omitempty"`
-	AccumulatedFees         map[string]fixedpoint.Value `json:"accumulatedFees,omitempty"`
-	AccumulatedVolume       fixedpoint.Value            `json:"accumulatedVolume,omitempty"`
-}
-
-func (s *State) IsOver24Hours() bool {
-	return time.Since(s.AccumulatedFeeStartedAt) >= 24*time.Hour
-}
-
-func (s *State) Reset() {
-	t := time.Now()
-	dateTime := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
-
-	log.Infof("resetting accumulated started time to: %s", dateTime)
-
-	s.AccumulatedFeeStartedAt = dateTime
-	s.AccumulatedFees = make(map[string]fixedpoint.Value)
-	s.AccumulatedVolume = fixedpoint.Zero
-}
-
 type Strategy struct {
 	*common.Strategy
+	*common.FeeBudget
 
 	Environment *bbgo.Environment
 
@@ -70,15 +50,14 @@ type Strategy struct {
 	Quantity        fixedpoint.Value `json:"quantity"`
 	DryRun          bool             `json:"dryRun"`
 
-	DailyFeeBudgets map[string]fixedpoint.Value `json:"dailyFeeBudgets,omitempty"`
-	DailyMaxVolume  fixedpoint.Value            `json:"dailyMaxVolume,omitempty"`
-	UpdateInterval  types.Duration              `json:"updateInterval"`
-	SimulateVolume  bool                        `json:"simulateVolume"`
+	DailyMaxVolume    fixedpoint.Value `json:"dailyMaxVolume,omitempty"`
+	DailyTargetVolume fixedpoint.Value `json:"dailyTargetVolume,omitempty"`
+	UpdateInterval    types.Duration   `json:"updateInterval"`
+	SimulateVolume    bool             `json:"simulateVolume"`
+	SimulatePrice     bool             `json:"simulatePrice"`
 
 	sourceSession, tradingSession *bbgo.ExchangeSession
 	sourceMarket, tradingMarket   types.Market
-
-	State *State `persistence:"state"`
 
 	mu                                sync.Mutex
 	lastSourceKLine, lastTradingKLine types.KLine
@@ -90,6 +69,10 @@ type Strategy struct {
 func (s *Strategy) Initialize() error {
 	if s.Strategy == nil {
 		s.Strategy = &common.Strategy{}
+	}
+
+	if s.FeeBudget == nil {
+		s.FeeBudget = &common.FeeBudget{}
 	}
 	return nil
 }
@@ -103,48 +86,6 @@ func (s *Strategy) Defaults() error {
 		s.UpdateInterval = types.Duration(time.Second)
 	}
 	return nil
-}
-
-func (s *Strategy) isBudgetAllowed() bool {
-	if s.DailyFeeBudgets == nil {
-		return true
-	}
-
-	if s.State.AccumulatedFees == nil {
-		return true
-	}
-
-	for asset, budget := range s.DailyFeeBudgets {
-		if fee, ok := s.State.AccumulatedFees[asset]; ok {
-			if fee.Compare(budget) >= 0 {
-				log.Warnf("accumulative fee %s exceeded the fee budget %s, skipping...", fee.String(), budget.String())
-				return false
-			}
-		}
-	}
-
-	return true
-}
-
-func (s *Strategy) handleTradeUpdate(trade types.Trade) {
-	log.Infof("received trade %s", trade.String())
-
-	if trade.Symbol != s.Symbol {
-		return
-	}
-
-	if s.State.IsOver24Hours() {
-		s.State.Reset()
-	}
-
-	// safe check
-	if s.State.AccumulatedFees == nil {
-		s.State.AccumulatedFees = make(map[string]fixedpoint.Value)
-	}
-
-	s.State.AccumulatedFees[trade.FeeCurrency] = s.State.AccumulatedFees[trade.FeeCurrency].Add(trade.Fee)
-	s.State.AccumulatedVolume = s.State.AccumulatedVolume.Add(trade.Quantity)
-	log.Infof("accumulated fee: %s %s", s.State.AccumulatedFees[trade.FeeCurrency].String(), trade.FeeCurrency)
 }
 
 func (s *Strategy) CrossSubscribe(sessions map[string]*bbgo.ExchangeSession) {
@@ -189,23 +130,14 @@ func (s *Strategy) CrossRun(ctx context.Context, _ bbgo.OrderExecutionRouter, se
 	}
 
 	s.Strategy.Initialize(ctx, s.Environment, tradingSession, s.tradingMarket, ID, s.InstanceID())
+	s.FeeBudget.Initialize()
 
 	s.stopC = make(chan struct{})
-
-	if s.State == nil {
-		s.State = &State{}
-		s.State.Reset()
-	}
-
-	if s.State.IsOver24Hours() {
-		log.Warn("state is over 24 hours, resetting to zero")
-		s.State.Reset()
-	}
 
 	bbgo.OnShutdown(ctx, func(ctx context.Context, wg *sync.WaitGroup) {
 		defer wg.Done()
 		close(s.stopC)
-		bbgo.Sync(context.Background(), s)
+		bbgo.Sync(ctx, s)
 	})
 
 	// from here, set data binding
@@ -220,13 +152,20 @@ func (s *Strategy) CrossRun(ctx context.Context, _ bbgo.OrderExecutionRouter, se
 		s.mu.Unlock()
 	})
 
-	s.sourceBook = types.NewStreamBook(s.Symbol)
-	s.sourceBook.BindStream(s.sourceSession.MarketDataStream)
+	if s.SourceExchange != "" {
+		s.sourceBook = types.NewStreamBook(s.Symbol)
+		s.sourceBook.BindStream(s.sourceSession.MarketDataStream)
+	}
 
 	s.tradingBook = types.NewStreamBook(s.Symbol)
 	s.tradingBook.BindStream(s.tradingSession.MarketDataStream)
 
-	s.tradingSession.UserDataStream.OnTradeUpdate(s.handleTradeUpdate)
+	s.tradingSession.UserDataStream.OnTradeUpdate(func(trade types.Trade) {
+		if trade.Symbol != s.Symbol {
+			return
+		}
+		s.FeeBudget.HandleTradeUpdate(trade)
+	})
 
 	go func() {
 		ticker := time.NewTicker(
@@ -243,7 +182,7 @@ func (s *Strategy) CrossRun(ctx context.Context, _ bbgo.OrderExecutionRouter, se
 				return
 
 			case <-ticker.C:
-				if !s.isBudgetAllowed() {
+				if !s.IsBudgetAllowed() {
 					continue
 				}
 
@@ -274,8 +213,8 @@ func (s *Strategy) placeOrders(ctx context.Context) {
 		log.Infof("trading book spread=%s %s",
 			spread.String(), spreadPercentage.Percentage())
 
-		// use the source book price if the spread percentage greater than 10%
-		if spreadPercentage.Compare(StepPercentageGap) > 0 {
+		// use the source book price if the spread percentage greater than 5%
+		if s.SimulatePrice && s.sourceBook != nil && spreadPercentage.Compare(maxStepPercentageGap) > 0 {
 			log.Warnf("spread too large (%s %s), using source book",
 				spread.String(), spreadPercentage.Percentage())
 			bestBid, hasBid = s.sourceBook.BestBid()
@@ -298,7 +237,7 @@ func (s *Strategy) placeOrders(ctx context.Context) {
 			return
 		}
 
-	} else {
+	} else if s.sourceBook != nil {
 		bestBid, hasBid = s.sourceBook.BestBid()
 		bestAsk, hasAsk = s.sourceBook.BestAsk()
 	}
@@ -308,9 +247,15 @@ func (s *Strategy) placeOrders(ctx context.Context) {
 		return
 	}
 
+	if bestBid.Price.IsZero() || bestAsk.Price.IsZero() {
+		log.Warn("bid price or ask price is zero")
+		return
+	}
+
 	var spread = bestAsk.Price.Sub(bestBid.Price)
 	var spreadPercentage = spread.Div(bestAsk.Price)
-	log.Infof("spread=%s %s ask=%s bid=%s",
+
+	log.Infof("spread:%s %s ask:%s bid:%s",
 		spread.String(), spreadPercentage.Percentage(),
 		bestAsk.Price.String(), bestBid.Price.String())
 	// var spreadPercentage = spread.Float64() / bestBid.Price.Float64()
@@ -327,6 +272,7 @@ func (s *Strategy) placeOrders(ctx context.Context) {
 		log.Errorf("base balance %s not found", s.tradingMarket.BaseCurrency)
 		return
 	}
+
 	quoteBalance, ok := balances[s.tradingMarket.QuoteCurrency]
 	if !ok {
 		log.Errorf("quote balance %s not found", s.tradingMarket.QuoteCurrency)
@@ -335,19 +281,24 @@ func (s *Strategy) placeOrders(ctx context.Context) {
 
 	minQuantity := s.tradingMarket.AdjustQuantityByMinNotional(s.tradingMarket.MinQuantity, price)
 
-	if baseBalance.Available.Compare(minQuantity) < 0 {
+	if baseBalance.Available.Compare(minQuantity) <= 0 {
 		log.Infof("base balance: %s %s is not enough, skip", baseBalance.Available.String(), s.tradingMarket.BaseCurrency)
 		return
 	}
 
-	if quoteBalance.Available.Div(price).Compare(minQuantity) < 0 {
+	if quoteBalance.Available.Div(price).Compare(minQuantity) <= 0 {
 		log.Infof("quote balance: %s %s is not enough, skip", quoteBalance.Available.String(), s.tradingMarket.QuoteCurrency)
 		return
 	}
 
-	maxQuantity := fixedpoint.Min(baseBalance.Available, quoteBalance.Available.Div(price))
+	maxQuantity := baseBalance.Available
+	if !quoteBalance.Available.IsZero() {
+		maxQuantity = fixedpoint.Min(maxQuantity, quoteBalance.Available.Div(price))
+	}
+
 	quantity := minQuantity
 
+	// if we set the fixed quantity, we should use the fixed
 	if s.Quantity.Sign() > 0 {
 		quantity = fixedpoint.Max(s.Quantity, quantity)
 	} else if s.SimulateVolume {
@@ -365,13 +316,20 @@ func (s *Strategy) placeOrders(ctx context.Context) {
 			}
 		}
 		s.mu.Unlock()
+	} else if s.DailyTargetVolume.Sign() > 0 {
+		numOfTicks := (24 * time.Hour) / s.UpdateInterval.Duration()
+		quantity = fixedpoint.NewFromFloat(s.DailyTargetVolume.Float64() / float64(numOfTicks))
+		quantity = quantityJitter(quantity, 0.02)
 	} else {
 		// plus a 2% quantity jitter
-		jitter := 1.0 + math.Max(0.02, rand.Float64())
-		quantity = quantity.Mul(fixedpoint.NewFromFloat(jitter))
+		quantity = quantityJitter(quantity, 0.02)
 	}
 
+	log.Infof("%s quantity: %f", s.Symbol, quantity.Float64())
+
 	quantity = fixedpoint.Min(quantity, maxQuantity)
+
+	log.Infof("%s adjusted quantity: %f", s.Symbol, quantity.Float64())
 
 	orderForms := []types.SubmitOrder{
 		{
@@ -410,4 +368,9 @@ func (s *Strategy) cancelOrders(ctx context.Context) {
 	if err := s.OrderExecutor.GracefulCancel(ctx); err != nil {
 		log.WithError(err).Error("cancel order error")
 	}
+}
+
+func quantityJitter(q fixedpoint.Value, rg float64) fixedpoint.Value {
+	jitter := 1.0 + math.Max(rg, rand.Float64())
+	return q.Mul(fixedpoint.NewFromFloat(jitter))
 }

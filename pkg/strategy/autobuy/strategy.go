@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/robfig/cron/v3"
+	"github.com/sirupsen/logrus"
+
 	"github.com/c9s/bbgo/pkg/bbgo"
 	"github.com/c9s/bbgo/pkg/fixedpoint"
 	indicatorv2 "github.com/c9s/bbgo/pkg/indicator/v2"
 	"github.com/c9s/bbgo/pkg/strategy/common"
 	"github.com/c9s/bbgo/pkg/types"
-	"github.com/robfig/cron/v3"
-	"github.com/sirupsen/logrus"
 )
 
 const ID = "autobuy"
@@ -28,12 +29,16 @@ type Strategy struct {
 	Environment *bbgo.Environment
 	Market      types.Market
 
-	Symbol    string                  `json:"symbol"`
-	Schedule  string                  `json:"schedule"`
-	Threshold fixedpoint.Value        `json:"threshold"`
-	PriceType types.PriceType         `json:"priceType"`
-	Bollinger *types.BollingerSetting `json:"bollinger"`
-	DryRun    bool                    `json:"dryRun"`
+	Symbol         string                  `json:"symbol"`
+	Schedule       string                  `json:"schedule"`
+	MinBaseBalance fixedpoint.Value        `json:"minBaseBalance"`
+	OrderType      types.OrderType         `json:"orderType"`
+	PriceType      types.PriceType         `json:"priceType"`
+	Bollinger      *types.BollingerSetting `json:"bollinger"`
+	DryRun         bool                    `json:"dryRun"`
+
+	// Deprecated, to be replaced by MinBaseBalance
+	Threshold fixedpoint.Value `json:"threshold"`
 
 	bbgo.QuantityOrAmount
 
@@ -44,6 +49,10 @@ type Strategy struct {
 func (s *Strategy) Initialize() error {
 	if s.Strategy == nil {
 		s.Strategy = &common.Strategy{}
+	}
+
+	if s.Threshold.Sign() > 0 && s.MinBaseBalance.IsZero() {
+		s.MinBaseBalance = s.Threshold
 	}
 	return nil
 }
@@ -57,13 +66,39 @@ func (s *Strategy) InstanceID() string {
 }
 
 func (s *Strategy) Validate() error {
+	if s.Symbol == "" {
+		return fmt.Errorf("symbol is required")
+	}
+
+	if s.Schedule == "" {
+		return fmt.Errorf("schedule is required")
+	}
+
+	if s.MinBaseBalance.Sign() <= 0 {
+		return fmt.Errorf("minBaseBalance must be greater than 0")
+	}
+
 	if err := s.QuantityOrAmount.Validate(); err != nil {
 		return err
+	}
+
+	if s.Bollinger != nil {
+		if s.Bollinger.Interval == "" {
+			return fmt.Errorf("bollinger interval is required")
+		}
+
+		if s.Bollinger.BandWidth <= 0 {
+			return fmt.Errorf("bollinger band width must be greater than 0")
+		}
 	}
 	return nil
 }
 
 func (s *Strategy) Defaults() error {
+	if s.OrderType == "" {
+		s.OrderType = types.OrderTypeLimit
+	}
+
 	if s.PriceType == "" {
 		s.PriceType = types.PriceTypeMaker
 	}
@@ -71,13 +106,17 @@ func (s *Strategy) Defaults() error {
 }
 
 func (s *Strategy) Subscribe(session *bbgo.ExchangeSession) {
-	session.Subscribe(types.KLineChannel, s.Symbol, types.SubscribeOptions{Interval: s.Bollinger.Interval})
+	if s.Bollinger != nil {
+		session.Subscribe(types.KLineChannel, s.Symbol, types.SubscribeOptions{Interval: s.Bollinger.Interval})
+	}
 }
 
 func (s *Strategy) Run(ctx context.Context, _ bbgo.OrderExecutor, session *bbgo.ExchangeSession) error {
 	s.Strategy.Initialize(ctx, s.Environment, session, s.Market, ID, s.InstanceID())
 
-	s.boll = session.Indicators(s.Symbol).BOLL(s.Bollinger.IntervalWindow, s.Bollinger.BandWidth)
+	if s.Bollinger != nil {
+		s.boll = session.Indicators(s.Symbol).BOLL(s.Bollinger.IntervalWindow, s.Bollinger.BandWidth)
+	}
 
 	s.OrderExecutor.ActiveMakerOrders().OnFilled(func(order types.Order) {
 		s.autobuy(ctx)
@@ -121,24 +160,24 @@ func (s *Strategy) autobuy(ctx context.Context) {
 	}
 
 	side := types.SideTypeBuy
-	price := s.PriceType.Map(ticker, side)
+	price := s.PriceType.GetPrice(ticker, side)
 
-	if price.Float64() > s.boll.UpBand.Last(0) {
+	if s.boll != nil && price.Float64() > s.boll.UpBand.Last(0) {
 		log.Infof("price %s is higher than upper band %f, skip", price.String(), s.boll.UpBand.Last(0))
 		return
 	}
 
-	if balance.Available.Compare(s.Threshold) > 0 {
-		log.Infof("balance %s is higher than threshold %s", balance.Available.String(), s.Threshold.String())
+	if balance.Available.Compare(s.MinBaseBalance) > 0 {
+		log.Infof("balance %s is higher than minBaseBalance %s", balance.Available.String(), s.MinBaseBalance.String())
 		return
 	}
-	log.Infof("balance %s is lower than threshold %s", balance.Available.String(), s.Threshold.String())
+	log.Infof("balance %s is lower than minBaseBalance %s", balance.Available.String(), s.MinBaseBalance.String())
 
 	quantity := s.CalculateQuantity(price)
 	submitOrder := types.SubmitOrder{
 		Symbol:   s.Symbol,
 		Side:     side,
-		Type:     types.OrderTypeLimitMaker,
+		Type:     s.OrderType,
 		Quantity: quantity,
 		Price:    price,
 	}

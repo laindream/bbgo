@@ -133,15 +133,17 @@ type Deposit struct {
 	UpdatedAt       types.MillisecondTimestamp `json:"updated_at"`
 }
 
-//go:generate GetRequest -url "v2/deposits" -type GetDepositHistoryRequest -responseType []Deposit
+//go:generate GetRequest -url "v3/deposits" -type GetDepositHistoryRequest -responseType []Deposit
 type GetDepositHistoryRequest struct {
 	client requestgen.AuthenticatedAPIClient
 
-	currency *string    `param:"currency"`
-	from     *time.Time `param:"from,seconds"` // seconds
-	to       *time.Time `param:"to,seconds"`   // seconds
-	state    *string    `param:"state"`        // submitting, submitted, rejected, accepted, checking, refunded, canceled, suspect
-	limit    *int       `param:"limit"`
+	currency  *string    `param:"currency"`
+	timestamp *time.Time `param:"timestamp,milliseconds"` // seconds
+	state     *string    `param:"state"`                  // submitting, submitted, rejected, accepted, checking, refunded, canceled, suspect
+
+	order *string `param:"order"`
+
+	limit *int `param:"limit"`
 }
 
 func (c *RestClient) NewGetDepositHistoryRequest() *GetDepositHistoryRequest {
@@ -155,7 +157,23 @@ type WithdrawState string
 
 const (
 	WithdrawStateSubmitting WithdrawState = "submitting"
+	WithdrawStateSubmitted  WithdrawState = "submitted"
 	WithdrawStateConfirmed  WithdrawState = "confirmed"
+	WithdrawStatePending    WithdrawState = "pending"
+	WithdrawStateProcessing WithdrawState = "processing"
+	WithdrawStateCanceled   WithdrawState = "canceled"
+	WithdrawStateFailed     WithdrawState = "failed"
+	WithdrawStateSent       WithdrawState = "sent"
+	WithdrawStateRejected   WithdrawState = "rejected"
+)
+
+type WithdrawStatus string
+
+const (
+	WithdrawStatusPending   WithdrawStatus = "pending"
+	WithdrawStatusCancelled WithdrawStatus = "cancelled"
+	WithdrawStatusFailed    WithdrawStatus = "failed"
+	WithdrawStatusOK        WithdrawStatus = "ok"
 )
 
 type Withdraw struct {
@@ -167,28 +185,37 @@ type Withdraw struct {
 	FeeCurrency     string           `json:"fee_currency"`
 	TxID            string           `json:"txid"`
 
+	NetworkProtocol string `json:"network_protocol"`
+	Address         string `json:"to_address"`
+
 	// State can be "submitting", "submitted",
 	//     "rejected", "accepted", "suspect", "approved", "delisted_processing",
 	//     "processing", "retryable", "sent", "canceled",
 	//     "failed", "pending", "confirmed",
 	//     "kgi_manually_processing", "kgi_manually_confirmed", "kgi_possible_failed",
 	//     "sygna_verifying"
-	State         string                     `json:"state"`
-	Confirmations int                        `json:"confirmations"`
-	CreatedAt     types.MillisecondTimestamp `json:"created_at"`
-	UpdatedAt     types.MillisecondTimestamp `json:"updated_at"`
-	Notes         string                     `json:"notes"`
+	State WithdrawState `json:"state"`
+
+	// Status WithdrawStatus `json:"status,omitempty"`
+
+	CreatedAt types.MillisecondTimestamp `json:"created_at"`
+	UpdatedAt types.MillisecondTimestamp `json:"updated_at"`
+	Notes     string                     `json:"notes"`
 }
 
-//go:generate GetRequest -url "v2/withdrawals" -type GetWithdrawHistoryRequest -responseType []Withdraw
+//go:generate GetRequest -url "v3/withdrawals" -type GetWithdrawHistoryRequest -responseType []Withdraw
 type GetWithdrawHistoryRequest struct {
 	client requestgen.AuthenticatedAPIClient
 
-	currency string     `param:"currency"`
-	from     *time.Time `param:"from,seconds"` // seconds
-	to       *time.Time `param:"to,seconds"`   // seconds
-	state    *string    `param:"state"`        // submitting, submitted, rejected, accepted, checking, refunded, canceled, suspect
-	limit    *int       `param:"limit"`
+	currency  *string    `param:"currency"`
+	state     *string    `param:"state"`                  // submitting, submitted, rejected, accepted, checking, refunded, canceled, suspect
+	timestamp *time.Time `param:"timestamp,milliseconds"` // milli-seconds
+
+	// order could be desc or asc
+	order *string `param:"order"`
+
+	// limit's default = 50
+	limit *int `param:"limit"`
 }
 
 func (c *RestClient) NewGetWithdrawalHistoryRequest() *GetWithdrawHistoryRequest {

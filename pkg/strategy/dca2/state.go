@@ -7,6 +7,10 @@ import (
 	"github.com/c9s/bbgo/pkg/bbgo"
 )
 
+const (
+	openPositionRetryInterval = 10 * time.Minute
+)
+
 type State int64
 
 const (
@@ -70,7 +74,7 @@ func (s *Strategy) emitNextState(nextState State) {
 // TakeProfitReady -> the takeProfit order filled ->
 func (s *Strategy) runState(ctx context.Context) {
 	s.logger.Info("[DCA] runState")
-	stateTriggerTicker := time.NewTicker(5 * time.Second)
+	stateTriggerTicker := time.NewTicker(1 * time.Minute)
 	defer stateTriggerTicker.Stop()
 
 	for {
@@ -79,7 +83,7 @@ func (s *Strategy) runState(ctx context.Context) {
 			s.logger.Info("[DCA] runState DONE")
 			return
 		case <-stateTriggerTicker.C:
-			// s.logger.Infof("[DCA] triggerNextState current state: %d", s.state)
+			// move triggerNextState to the end of next state handler, this ticker is used to avoid the state is stopped unexpectedly
 			s.triggerNextState()
 		case nextState := <-s.nextStateC:
 			// next state == current state -> skip
@@ -100,21 +104,8 @@ func (s *Strategy) runState(ctx context.Context) {
 			}
 
 			// move to next state
-			switch s.state {
-			case WaitToOpenPosition:
-				s.runWaitToOpenPositionState(ctx, nextState)
-			case PositionOpening:
-				s.runPositionOpening(ctx, nextState)
-			case OpenPositionReady:
-				s.runOpenPositionReady(ctx, nextState)
-			case OpenPositionOrderFilled:
-				s.runOpenPositionOrderFilled(ctx, nextState)
-			case OpenPositionOrdersCancelling:
-				s.runOpenPositionOrdersCancelling(ctx, nextState)
-			case OpenPositionOrdersCancelled:
-				s.runOpenPositionOrdersCancelled(ctx, nextState)
-			case TakeProfitReady:
-				s.runTakeProfitReady(ctx, nextState)
+			if triggerImmediately := s.moveToNextState(ctx, nextState); triggerImmediately {
+				s.triggerNextState()
 			}
 		}
 	}
@@ -135,73 +126,96 @@ func (s *Strategy) triggerNextState() {
 	}
 }
 
-func (s *Strategy) runWaitToOpenPositionState(ctx context.Context, next State) {
+// moveToNextState will run the process when moving current state to next state
+// it will return true if we want it trigger the next state immediately
+func (s *Strategy) moveToNextState(ctx context.Context, nextState State) bool {
+	switch s.state {
+	case WaitToOpenPosition:
+		return s.runWaitToOpenPositionState(ctx, nextState)
+	case PositionOpening:
+		return s.runPositionOpening(ctx, nextState)
+	case OpenPositionReady:
+		return s.runOpenPositionReady(ctx, nextState)
+	case OpenPositionOrderFilled:
+		return s.runOpenPositionOrderFilled(ctx, nextState)
+	case OpenPositionOrdersCancelling:
+		return s.runOpenPositionOrdersCancelling(ctx, nextState)
+	case OpenPositionOrdersCancelled:
+		return s.runOpenPositionOrdersCancelled(ctx, nextState)
+	case TakeProfitReady:
+		return s.runTakeProfitReady(ctx, nextState)
+	}
+
+	s.logger.Errorf("unexpected state: %d, please check it", s.state)
+	return false
+}
+
+func (s *Strategy) runWaitToOpenPositionState(ctx context.Context, next State) bool {
 	if s.nextRoundPaused {
 		s.logger.Info("[State] WaitToOpenPosition - nextRoundPaused is set")
-		return
+		return false
 	}
 
 	if time.Now().Before(s.startTimeOfNextRound) {
-		s.logger.Infof("[State] WaitToOpenPosition - before the startTimeOfNextRound %s", s.startTimeOfNextRound.String())
-		return
+		return false
 	}
 
 	s.updateState(PositionOpening)
 	s.logger.Info("[State] WaitToOpenPosition -> PositionOpening")
+	return true
 }
 
-func (s *Strategy) runPositionOpening(ctx context.Context, next State) {
+func (s *Strategy) runPositionOpening(ctx context.Context, next State) bool {
 	s.logger.Info("[State] PositionOpening - start placing open-position orders")
-	if err := s.placeOpenPositionOrders(ctx); err != nil {
-		s.logger.WithError(err).Error("failed to place dca orders, please check it.")
 
-		// try after 1 minute when failed to placing orders
-		s.startTimeOfNextRound = s.startTimeOfNextRound.Add(1 * time.Minute)
-		s.updateState(WaitToOpenPosition)
-		return
+	if err := s.placeOpenPositionOrders(ctx); err != nil {
+		s.logger.WithError(err).Error("failed to place open-position orders, please check it.")
+		return false
 	}
 
 	s.updateState(OpenPositionReady)
 	s.logger.Info("[State] PositionOpening -> OpenPositionReady")
+	// do not trigger next state immediately, because OpenPositionReady state only trigger by kline to move to the next state
+	return false
 }
 
-func (s *Strategy) runOpenPositionReady(_ context.Context, next State) {
+func (s *Strategy) runOpenPositionReady(_ context.Context, next State) bool {
 	s.updateState(OpenPositionOrderFilled)
 	s.logger.Info("[State] OpenPositionReady -> OpenPositionOrderFilled")
+	// do not trigger next state immediately, because OpenPositionOrderFilled state only trigger by kline to move to the next state
+	return false
 }
 
-func (s *Strategy) runOpenPositionOrderFilled(_ context.Context, next State) {
+func (s *Strategy) runOpenPositionOrderFilled(_ context.Context, next State) bool {
 	s.updateState(OpenPositionOrdersCancelling)
 	s.logger.Info("[State] OpenPositionOrderFilled -> OpenPositionOrdersCancelling")
-
-	// after open position cancelling, immediately trigger open position cancelled to cancel the other orders
-	s.emitNextState(OpenPositionOrdersCancelled)
+	return true
 }
 
-func (s *Strategy) runOpenPositionOrdersCancelling(ctx context.Context, next State) {
+func (s *Strategy) runOpenPositionOrdersCancelling(ctx context.Context, next State) bool {
 	s.logger.Info("[State] OpenPositionOrdersCancelling - start cancelling open-position orders")
 	if err := s.OrderExecutor.GracefulCancel(ctx); err != nil {
 		s.logger.WithError(err).Error("failed to cancel maker orders")
-		return
+		return false
 	}
 	s.updateState(OpenPositionOrdersCancelled)
 	s.logger.Info("[State] OpenPositionOrdersCancelling -> OpenPositionOrdersCancelled")
-
-	// after open position cancelled, immediately trigger take profit ready to open take-profit order
-	s.emitNextState(TakeProfitReady)
+	return true
 }
 
-func (s *Strategy) runOpenPositionOrdersCancelled(ctx context.Context, next State) {
+func (s *Strategy) runOpenPositionOrdersCancelled(ctx context.Context, next State) bool {
 	s.logger.Info("[State] OpenPositionOrdersCancelled - start placing take-profit orders")
 	if err := s.placeTakeProfitOrders(ctx); err != nil {
 		s.logger.WithError(err).Error("failed to open take profit orders")
-		return
+		return false
 	}
 	s.updateState(TakeProfitReady)
 	s.logger.Info("[State] OpenPositionOrdersCancelled -> TakeProfitReady")
+	// do not trigger next state immediately, because TakeProfitReady state only trigger by kline to move to the next state
+	return false
 }
 
-func (s *Strategy) runTakeProfitReady(ctx context.Context, next State) {
+func (s *Strategy) runTakeProfitReady(ctx context.Context, next State) bool {
 	// wait 3 seconds to avoid position not update
 	time.Sleep(3 * time.Second)
 
@@ -215,11 +229,16 @@ func (s *Strategy) runTakeProfitReady(ctx context.Context, next State) {
 	// reset position and open new round for profit stats before position opening
 	s.Position.Reset()
 
+	// emit position
+	s.OrderExecutor.TradeCollector().EmitPositionUpdate(s.Position)
+
 	// store into redis
 	bbgo.Sync(ctx, s)
 
 	// set the start time of the next round
 	s.startTimeOfNextRound = time.Now().Add(s.CoolDownInterval.Duration())
 	s.updateState(WaitToOpenPosition)
-	s.logger.Info("[State] TakeProfitReady -> WaitToOpenPosition")
+	s.logger.Infof("[State] TakeProfitReady -> WaitToOpenPosition (startTimeOfNextRound: %s)", s.startTimeOfNextRound.String())
+
+	return false
 }

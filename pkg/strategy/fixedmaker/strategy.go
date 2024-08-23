@@ -35,7 +35,7 @@ type Strategy struct {
 	OrderType  types.OrderType  `json:"orderType"`
 	DryRun     bool             `json:"dryRun"`
 
-	InventorySkew InventorySkew `json:"inventorySkew"`
+	InventorySkew common.InventorySkew `json:"inventorySkew"`
 
 	activeOrderBook *bbgo.ActiveOrderBook
 }
@@ -123,6 +123,7 @@ func (s *Strategy) Run(ctx context.Context, _ bbgo.OrderExecutor, session *bbgo.
 	bbgo.OnShutdown(ctx, func(ctx context.Context, wg *sync.WaitGroup) {
 		defer wg.Done()
 		_ = s.OrderExecutor.GracefulCancel(ctx)
+		bbgo.Sync(ctx, s)
 	})
 
 	return nil
