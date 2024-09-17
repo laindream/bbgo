@@ -247,29 +247,6 @@ func toGlobalTradeV3(t v3.Trade) ([]types.Trade, error) {
 	return trades, nil
 }
 
-func toGlobalTradeV2(t max.Trade) (*types.Trade, error) {
-	isMargin := t.WalletType == max.WalletTypeMargin
-	side := toGlobalSideType(t.Side)
-	return &types.Trade{
-		ID:            t.ID,
-		OrderID:       t.OrderID,
-		Price:         t.Price,
-		Symbol:        toGlobalSymbol(t.Market),
-		Exchange:      types.ExchangeMax,
-		Quantity:      t.Volume,
-		Side:          side,
-		IsBuyer:       t.IsBuyer(),
-		IsMaker:       t.IsMaker(),
-		Fee:           t.Fee,
-		FeeCurrency:   toGlobalCurrency(t.FeeCurrency),
-		QuoteQuantity: t.Funds,
-		Time:          types.Time(t.CreatedAt),
-		IsMargin:      isMargin,
-		IsIsolated:    false,
-		IsFutures:     false,
-	}, nil
-}
-
 func toGlobalDepositStatus(a max.DepositState) types.DepositStatus {
 	switch a {
 
@@ -284,11 +261,21 @@ func toGlobalDepositStatus(a max.DepositState) types.DepositStatus {
 
 	case max.DepositStateAccepted:
 		return types.DepositSuccess
+
+	case max.DepositStateFailed: // v3 state
+		return types.DepositRejected
+
+	case max.DepositStateProcessing: // v3 states
+		return types.DepositPending
+
+	case max.DepositStateDone: // v3 states
+		return types.DepositSuccess
+
 	}
 
 	// other states goes to this
 	// max.DepositStateSuspect, max.DepositStateSuspended
-	log.Warnf("unsupported deposit state %q from max exchange", a)
+	log.Errorf("unsupported deposit state %q from max exchange", a)
 	return types.DepositStatus(a)
 }
 

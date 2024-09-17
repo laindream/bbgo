@@ -116,6 +116,11 @@ const (
 	DepositStateSuspended  DepositState = "suspended"
 	DepositStateAccepted   DepositState = "accepted"
 	DepositStateChecking   DepositState = "checking"
+
+	// v3 states
+	DepositStateProcessing DepositState = "processing"
+	DepositStateFailed     DepositState = "failed"
+	DepositStateDone       DepositState = "done"
 )
 
 type Deposit struct {

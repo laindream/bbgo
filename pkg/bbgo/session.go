@@ -405,6 +405,8 @@ func (session *ExchangeSession) initSymbol(ctx context.Context, environ *Environ
 		return fmt.Errorf("market %s is not defined", symbol)
 	}
 
+	session.logger.Infof("environment config: %+v", environ.environmentConfig)
+
 	disableMarketDataStore := environ.environmentConfig != nil && environ.environmentConfig.DisableMarketDataStore
 	disableSessionTradeBuffer := environ.environmentConfig != nil && environ.environmentConfig.DisableSessionTradeBuffer
 	maxSessionTradeBufferSize := 0
@@ -464,7 +466,7 @@ func (session *ExchangeSession) initSymbol(ctx context.Context, environ *Environ
 	for _, sub := range session.Subscriptions {
 		switch sub.Channel {
 		case types.BookChannel:
-			book := types.NewStreamBook(sub.Symbol)
+			book := types.NewStreamBook(sub.Symbol, session.ExchangeName)
 			book.BindStream(session.MarketDataStream)
 			session.orderBooks[sub.Symbol] = book
 
