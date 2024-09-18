@@ -24,6 +24,8 @@ type WindowBase struct {
 	Low               fixedpoint.Value `json:"low" db:"low"`
 	IsClosed          bool             `json:"isClosed" db:"is_closed"`
 	TradeCount        int              `json:"tradeCount" db:"trade_count"`
+	SellTradeCount    int              `json:"sellTradeCount" db:"sell_trade_count"`
+	BuyTradeCount     int              `json:"buyTradeCount" db:"buy_trade_count"`
 }
 
 var TradeDirectionAll = "all"
@@ -64,6 +66,30 @@ func (w *WindowBase) GetQuantityRate(direction string, duration time.Duration) f
 	}
 	fixedTimeSecond := duration.Seconds()
 	return qu / fixedTimeSecond
+}
+
+func (w *WindowBase) GetAvgPrice() float64 {
+	if w == nil || w.IsEmpty() {
+		return 0
+	}
+	if w.Quantity.IsZero() {
+		return 0
+	}
+	return w.QuoteQuantity.Div(w.Quantity).Float64()
+}
+
+func (w *WindowBase) GetSellTradeCount() int {
+	if w == nil {
+		return 0
+	}
+	return w.SellTradeCount
+}
+
+func (w *WindowBase) GetBuyTradeCount() int {
+	if w == nil {
+		return 0
+	}
+	return w.BuyTradeCount
 }
 
 func (w *WindowBase) GetTradeCount() int {
@@ -130,9 +156,11 @@ func (w *WindowBase) Update(trade *types.Trade) {
 	if trade.IsMaker {
 		w.SellQuantity += trade.Quantity
 		w.SellQuoteQuantity += trade.QuoteQuantity
+		w.SellTradeCount++
 	} else {
 		w.BuyQuantity += trade.Quantity
 		w.BuyQuoteQuantity += trade.QuoteQuantity
+		w.BuyTradeCount++
 	}
 	w.TradeCount++
 }

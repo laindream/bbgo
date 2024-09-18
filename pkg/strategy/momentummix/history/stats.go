@@ -13,6 +13,7 @@ import (
 type Statistic struct {
 	QuantityRate      float64
 	QuoteQuantityRate float64
+	AvgPrice          float64
 	mu                sync.Mutex
 }
 
@@ -28,6 +29,13 @@ func (s *Statistic) GetQuoteQuantityRate() float64 {
 		return 0
 	}
 	return s.QuoteQuantityRate
+}
+
+func (s *Statistic) GetAvgPrice() float64 {
+	if s == nil {
+		return 0
+	}
+	return s.AvgPrice
 }
 
 type MarketHistory struct {
@@ -70,6 +78,7 @@ func (s *MarketHistory) updateStat() {
 	s.stat.mu.Lock()
 	s.stat.QuantityRate = s.getQuantityRate()
 	s.stat.QuoteQuantityRate = s.getQuoteQuantityRate()
+	s.stat.AvgPrice = s.getAvgPrice()
 	s.stat.mu.Unlock()
 }
 
@@ -103,6 +112,23 @@ func (s *MarketHistory) getQuoteQuantityRate() float64 {
 		return 0
 	}
 	return quantity / timeDiff.Seconds()
+}
+
+func (s *MarketHistory) getAvgPrice() float64 {
+	stat := s.Get()
+	quantityStr := stat.Volume
+	quantity, err := strconv.ParseFloat(quantityStr, 64)
+	if err != nil {
+		log.WithError(err).Errorf("[marketstats] failed to parse quantity: %s", quantityStr)
+		return 0
+	}
+	quoteQuantityStr := stat.QuoteVolume
+	quoteQuantity, err := strconv.ParseFloat(quoteQuantityStr, 64)
+	if err != nil {
+		log.WithError(err).Errorf("[marketstats] failed to parse quote quantity: %s", quoteQuantityStr)
+		return 0
+	}
+	return quoteQuantity / quantity
 }
 
 func (s *MarketHistory) watchdog() {

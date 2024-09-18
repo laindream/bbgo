@@ -7,6 +7,7 @@ import (
 	"github.com/c9s/bbgo/pkg/strategy/momentummix/kline/tick"
 	"github.com/c9s/bbgo/pkg/types"
 	"github.com/sirupsen/logrus"
+	"sort"
 	"time"
 )
 
@@ -105,6 +106,14 @@ type QuoteQuantityExceedTrigger struct {
 	WinCount          int
 
 	IsGlobalTriggered bool
+
+	Top5ImbalanceRate []ImbalanceRate
+}
+
+type ImbalanceRate struct {
+	TickRate   float64
+	BookRate   float64
+	RecordTime time.Time
 }
 
 func (q *QuoteQuantityExceedTrigger) GetTotalValue() float64 {
@@ -465,6 +474,248 @@ func (q *QuoteQuantityExceedTrigger) BookTickerPush(bookTicker *types.BookTicker
 				bookTicker)
 		}
 	}
+}
+
+func (q *QuoteQuantityExceedTrigger) BookTickerPushV2(bookTicker *types.BookTicker) {
+	//##通用数据准备
+	//1.24h币种成交量速率
+	//2.当前敞口
+	//3.24h平均价格历史均价
+	//对于时间窗口：当前时间前的近期窗口和远期窗口
+	//时间窗口内数据：
+	//1.买价波动率
+	//2.卖价波动率
+	//3.单位时间成交量推动价格波动率（买卖分别计算）
+	//4.平均敞口大小及其方向
+	//5.平均买卖量计算出的不平衡率及其方向
+	//
+	//关于针的信息：
+	//
+	if q.Top5ImbalanceRate == nil {
+		q.Top5ImbalanceRate = make([]ImbalanceRate, 0)
+	}
+	//sort
+	sort.Slice(q.Top5ImbalanceRate, func(i, j int) bool {
+		return q.Top5ImbalanceRate[i].BookRate < q.Top5ImbalanceRate[j].BookRate
+	})
+	//只保留1小时内的
+	updatedTop5ImbalanceRate := make([]ImbalanceRate, 0)
+	for _, r := range q.Top5ImbalanceRate {
+		if r.RecordTime.After(time.Now().Add(-1 * time.Hour)) {
+			updatedTop5ImbalanceRate = append(updatedTop5ImbalanceRate, r)
+		}
+	}
+	q.Top5ImbalanceRate = updatedTop5ImbalanceRate
+
+	stat := q.History.GetStat()
+	//历史币种成交量速率
+	historyQuoteQuantityRate := stat.GetQuoteQuantityRate()
+	if historyQuoteQuantityRate == 0 {
+		return
+	}
+
+	//获取当前时间前的近期窗口
+	nearBeforeTime := bookTicker.TransactionTime.Add(-q.NearPriceFluctuationDuration)
+	//获取当前时间前的近期窗口的第一个和最后一个
+	nearBeforeTicker, _ := q.TickKline.GetFirstAndEnd(nearBeforeTime, bookTicker.TransactionTime)
+	if nearBeforeTicker == nil {
+		return
+	}
+	//计算当前时间前的近期窗口的买价波动率
+	//nearBeforeBuyPriceFluctuationRate := (bookTicker.Buy.Float64() - nearBeforeTicker.Buy.Float64()) / nearBeforeTicker.Buy.Float64()
+	//计算当前时间前的近期窗口的卖价波动率
+	nearBeforeSellPriceFluctuationRate := (bookTicker.Sell.Float64() - nearBeforeTicker.Sell.Float64()) / nearBeforeTicker.Sell.Float64()
+
+	//近期窗口Agg trade
+	nearBeforeAggTradeWindow := q.AggKline.GetWindow(nearBeforeTime, bookTicker.TransactionTime)
+	//近期窗口Sell agg trade count 占比
+	nearBeforeSellAggTradeCountRate := float64(nearBeforeAggTradeWindow.GetSellTradeCount()) / float64(nearBeforeAggTradeWindow.GetTradeCount())
+	nearBeforeTickWindow := q.TickKline.GetWindow(nearBeforeTime, bookTicker.TransactionTime)
+	nearBeforeAvgSpread := nearBeforeTickWindow.AvgSpread().Float64()
+
+	//获取当前时间前的远期窗口
+	farBeforeTime := bookTicker.TransactionTime.Add(-q.FarPriceFluctuationDuration)
+	//获取当前时间前的远期窗口的第一个和最后一个
+	farBeforeTicker, _ := q.TickKline.GetFirstAndEnd(farBeforeTime, bookTicker.TransactionTime)
+	if farBeforeTicker == nil {
+		return
+	}
+	//计算当前时间前的远期窗口的买价波动率
+	//farBeforeBuyPriceFluctuationRate := (bookTicker.Buy.Float64() - farBeforeTicker.Buy.Float64()) / farBeforeTicker.Buy.Float64()
+	//计算当前时间前的远期窗口的卖价波动率
+	farBeforeSellPriceFluctuationRate := (bookTicker.Sell.Float64() - farBeforeTicker.Sell.Float64()) / farBeforeTicker.Sell.Float64()
+
+	//远期窗口Agg trade
+	farBeforeAggTradeWindow := q.AggKline.GetWindow(farBeforeTime, bookTicker.TransactionTime)
+	//远期窗口Sell agg trade count 占比
+	farBeforeSellAggTradeCountRate := float64(farBeforeAggTradeWindow.GetSellTradeCount()) / float64(farBeforeAggTradeWindow.GetTradeCount())
+	farBeforeTickWindow := q.TickKline.GetWindow(farBeforeTime, bookTicker.TransactionTime)
+	farBeforeAvgSpread := farBeforeTickWindow.AvgSpread().Float64()
+
+	keepNearWindow := q.GetKeepNearWindow(bookTicker)
+	keepNearQuoteQuantityRate := keepNearWindow.GetQuoteQuantityRate(aggtrade.TradeDirectionAll, q.KeepNearDuration)
+	if keepNearQuoteQuantityRate == 0 {
+		return
+	}
+	keepBuyNearQuoteQuantityRate := keepNearWindow.GetQuoteQuantityRate(aggtrade.TradeDirectionBuy, q.KeepNearDuration)
+	keepSellNearQuoteQuantityRate := keepNearWindow.GetQuoteQuantityRate(aggtrade.TradeDirectionSell, q.KeepNearDuration)
+	keepRatio := keepNearQuoteQuantityRate / historyQuoteQuantityRate
+	keepDirection := ""
+	var imbalanceTriggerRate float64
+	if keepBuyNearQuoteQuantityRate > keepSellNearQuoteQuantityRate {
+		keepDirection = "buy"
+		imbalanceTriggerRate = keepBuyNearQuoteQuantityRate / keepSellNearQuoteQuantityRate
+	} else {
+		keepDirection = "sell"
+		imbalanceTriggerRate = keepSellNearQuoteQuantityRate / keepBuyNearQuoteQuantityRate
+	}
+
+	keepNearDurationTickWindow := q.TickKline.GetWindow(bookTicker.TransactionTime.Add(-q.KeepNearDuration), bookTicker.TransactionTime)
+	keepNearDurationAvgSpread := keepNearDurationTickWindow.AvgSpread().Float64()
+
+	book, ok := q.Session.OrderBook(q.Symbol)
+	if !ok {
+		return
+	}
+	//计算+- 2%内的book总价，去除best bid和best ask
+	bestAsk, _ := book.BestAsk()
+	bookPriceMax := bestAsk.Price.Float64() * 1.01
+	bestBid, _ := book.BestBid()
+	bookPriceMin := bestBid.Price.Float64() * 0.99
+	bookVolumeSell := 0.0
+	bookVolumeBuy := 0.0
+	bookSell := book.SideBook(types.SideTypeSell)
+	bookBuy := book.SideBook(types.SideTypeBuy)
+	book.Lock()
+	for i, b := range bookSell {
+		if i == 0 {
+			continue
+		}
+		if b.Price.Float64() > bookPriceMax || b.Price.Float64() < bookPriceMin {
+			break
+		}
+		bookVolumeSell += b.Volume.Float64()
+	}
+	for i, b := range bookBuy {
+		if i == 0 {
+			continue
+		}
+		if b.Price.Float64() > bookPriceMax || b.Price.Float64() < bookPriceMin {
+			break
+		}
+		bookVolumeBuy += b.Volume.Float64()
+	}
+	book.Unlock()
+	bookImbalanceDirection := ""
+	bookImbalanceRate := 0.0
+	if bookVolumeBuy > bookVolumeSell {
+		bookImbalanceDirection = "buy"
+		bookImbalanceRate = bookVolumeBuy / bookVolumeSell
+	} else {
+		bookImbalanceDirection = "sell"
+		bookImbalanceRate = bookVolumeSell / bookVolumeBuy
+	}
+	untrigger := false
+	//if bookImbalanceDirection != keepDirection {
+	//	untrigger = true
+	//}
+
+	imbalanceKeepRateCheckPass := false
+	imbalanceRate := ImbalanceRate{
+		TickRate:   imbalanceTriggerRate,
+		BookRate:   bookImbalanceRate,
+		RecordTime: bookTicker.TransactionTime,
+	}
+	if len(q.Top5ImbalanceRate) > 1 {
+		if bookImbalanceRate >= q.Top5ImbalanceRate[0].BookRate && imbalanceTriggerRate >= q.Top5ImbalanceRate[0].TickRate {
+			imbalanceKeepRateCheckPass = true
+			if len(q.Top5ImbalanceRate) >= 5 {
+				q.Top5ImbalanceRate[0] = imbalanceRate
+			} else {
+				q.Top5ImbalanceRate = append(q.Top5ImbalanceRate, imbalanceRate)
+			}
+		}
+	} else {
+		if bookImbalanceRate > 1.05 && imbalanceTriggerRate >= q.ImbalanceThresholdTriggerRate {
+			imbalanceKeepRateCheckPass = true
+			q.Top5ImbalanceRate = append(q.Top5ImbalanceRate, imbalanceRate)
+		}
+	}
+	if !imbalanceKeepRateCheckPass {
+		untrigger = true
+	}
+
+	if imbalanceTriggerRate < q.ImbalanceThresholdTriggerRate {
+		untrigger = true
+	}
+
+	//触发状态
+	if q.IsTrigger() {
+		if untrigger {
+			q.UnTrigger(bookTicker, 0)
+			q.Logger.Infof("[Record-OFF][%s][D:%s][FT:%s][NT:%s][KT:%s][FTF:%f][NTF:%f][KTIB:%f][KR:%f][FTSCR:%f][NTSCR:%f][KTAS:%f][FTAS:%f][NTAS:%f][BIB:%f][BID:%s][BVS:%f][BVB:%f]",
+				q.Symbol,
+				keepDirection,
+				q.FarPriceFluctuationDuration,
+				q.NearPriceFluctuationDuration,
+				q.KeepNearDuration,
+				farBeforeSellPriceFluctuationRate,
+				nearBeforeSellPriceFluctuationRate,
+				imbalanceTriggerRate,
+				keepRatio,
+				farBeforeSellAggTradeCountRate,
+				nearBeforeSellAggTradeCountRate,
+				keepNearDurationAvgSpread,
+				farBeforeAvgSpread,
+				nearBeforeAvgSpread,
+				bookImbalanceRate,
+				bookImbalanceDirection,
+				bookVolumeSell,
+				bookVolumeBuy)
+			return
+		}
+		return
+	}
+	//非触发状态
+	if !untrigger && imbalanceKeepRateCheckPass {
+		//print all info
+		//D : Direction
+		//FT: far time, NT: near time, KT: keep time
+		//FTF: far time fluctuation, NTF: near time fluctuation
+		//KTIB: imbalance
+		//KR: keep ratio
+		//FTSCR: far time sell count rate
+		//NTSCR: near time sell count rate
+		//KTAS: keep time avg spread
+		//FTAS: far time avg spread
+		//NTAS: near time avg spread
+		//BIB: book imbalance
+		//BVS: book volume sell
+		//BVB: book volume buy
+		//print: D, FT, NT, KT, FTF, NTF, KTIB, FTSCR, NTSCR, KTAS, FTAS, NTAS, BIB, BVS, BVB
+		q.Logger.Infof("[Record-ON][%s][D:%s][FT:%s][NT:%s][KT:%s][FTF:%f][NTF:%f][KTIB:%f][KR:%f][FTSCR:%f][NTSCR:%f][KTAS:%f][FTAS:%f][NTAS:%f][BIB:%f][BID:%s][BVS:%f][BVB:%f]",
+			q.Symbol,
+			keepDirection,
+			q.FarPriceFluctuationDuration,
+			q.NearPriceFluctuationDuration,
+			q.KeepNearDuration,
+			farBeforeSellPriceFluctuationRate,
+			nearBeforeSellPriceFluctuationRate,
+			imbalanceTriggerRate,
+			keepRatio,
+			farBeforeSellAggTradeCountRate,
+			nearBeforeSellAggTradeCountRate,
+			keepNearDurationAvgSpread,
+			farBeforeAvgSpread,
+			nearBeforeAvgSpread,
+			bookImbalanceRate,
+			bookImbalanceDirection,
+			bookVolumeSell,
+			bookVolumeBuy)
+		q.Trigger(bookTicker)
+
+	}
+	return
 }
 
 var maxSearchCount = 8

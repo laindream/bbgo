@@ -12,15 +12,17 @@ import (
 )
 
 type WindowBase struct {
-	StartTime   time.Time         `json:"startTime" db:"start_time"`
-	EndTime     time.Time         `json:"endTime" db:"end_time"`
-	Open        *types.BookTicker `json:"open" db:"open"`
-	Close       *types.BookTicker `json:"close" db:"close"`
-	High        fixedpoint.Value  `json:"high" db:"high"`
-	Low         fixedpoint.Value  `json:"low" db:"low"`
-	IsClosed    bool              `json:"isClosed" db:"is_closed"`
-	TickCount   int               `json:"tickCount" db:"tick_count"`
-	TotalSpread fixedpoint.Value  `json:"totalSpread" db:"total_spread"`
+	StartTime     time.Time         `json:"startTime" db:"start_time"`
+	EndTime       time.Time         `json:"endTime" db:"end_time"`
+	Open          *types.BookTicker `json:"open" db:"open"`
+	Close         *types.BookTicker `json:"close" db:"close"`
+	High          fixedpoint.Value  `json:"high" db:"high"`
+	Low           fixedpoint.Value  `json:"low" db:"low"`
+	IsClosed      bool              `json:"isClosed" db:"is_closed"`
+	SellTickCount int               `json:"sellTickCount" db:"sell_tick_count"`
+	BuyTickCount  int               `json:"buyTickCount" db:"buy_tick_count"`
+	TickCount     int               `json:"tickCount" db:"tick_count"`
+	TotalSpread   fixedpoint.Value  `json:"totalSpread" db:"total_spread"`
 }
 
 func (w *WindowBase) AvgSpread() (spread fixedpoint.Value) {
@@ -44,6 +46,11 @@ func (w *WindowBase) Update(ticker *types.BookTicker) {
 	w.Low = fixedpoint.Min(w.Low, ticker.Sell)
 	w.TickCount++
 	w.TotalSpread = w.TotalSpread.Add(ticker.Sell.Sub(ticker.Buy))
+	if ticker.Sell > ticker.Buy {
+		w.SellTickCount++
+	} else {
+		w.BuyTickCount++
+	}
 }
 
 func (w *WindowBase) AppendAfter(afterWindow *WindowBase) *WindowBase {

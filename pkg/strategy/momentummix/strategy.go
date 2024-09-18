@@ -105,7 +105,7 @@ func (s *Strategy) Run(ctx context.Context, orderExecutor bbgo.OrderExecutor, se
 			return
 		}
 		s.TriggerSet.OnUpdateRank()
-		s.QuoteQuantityExceedTriggers[bookTicker.Symbol].BookTickerPush(&bookTicker)
+		s.QuoteQuantityExceedTriggers[bookTicker.Symbol].BookTickerPushV2(&bookTicker)
 	})
 	session.MarketDataStream.OnAggTrade(func(trade types.Trade) {
 		s.AggKline[trade.Symbol].AppendTrade(&trade)
