@@ -79,6 +79,19 @@ func (slice PriceVolumeSlice) First() (PriceVolume, bool) {
 	return PriceVolume{}, false
 }
 
+// ElemOrLast returns the element on the index i, if i is out of range, it will return the last element
+func (slice PriceVolumeSlice) ElemOrLast(i int) (PriceVolume, bool) {
+	if len(slice) == 0 {
+		return PriceVolume{}, false
+	}
+
+	if i > len(slice)-1 {
+		return slice[len(slice)-1], true
+	}
+
+	return slice[i], true
+}
+
 func (slice PriceVolumeSlice) IndexByQuoteVolumeDepth(requiredQuoteVolume fixedpoint.Value) int {
 	var totalQuoteVolume = fixedpoint.Zero
 	for x, pv := range slice {
@@ -271,6 +284,28 @@ func (slice PriceVolumeSlice) AverageDepthPriceByQuote(requiredDepthInQuote fixe
 	}
 
 	return totalQuoteAmount.Div(totalQuantity)
+}
+
+func (slice PriceVolumeSlice) InPriceRange(midPrice fixedpoint.Value, side SideType, r fixedpoint.Value) (sub PriceVolumeSlice) {
+	switch side {
+	case SideTypeSell:
+		boundaryPrice := midPrice.Add(midPrice.Mul(r))
+		for _, pv := range slice {
+			if pv.Price.Compare(boundaryPrice) <= 0 {
+				sub = append(sub, pv)
+			}
+		}
+
+	case SideTypeBuy:
+		boundaryPrice := midPrice.Sub(midPrice.Mul(r))
+		for _, pv := range slice {
+			if pv.Price.Compare(boundaryPrice) >= 0 {
+				sub = append(sub, pv)
+			}
+		}
+	}
+
+	return sub
 }
 
 // AverageDepthPrice uses the required total quantity to calculate the corresponding price

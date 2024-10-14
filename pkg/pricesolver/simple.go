@@ -1,6 +1,7 @@
 package pricesolver
 
 import (
+	"context"
 	"sync"
 
 	log "github.com/sirupsen/logrus"
@@ -18,12 +19,12 @@ type SimplePriceSolver struct {
 	// pricesByBase stores the prices by currency names as a 2-level map
 	// BTC -> USDT -> 48000.0
 	// BTC -> TWD -> 1536000
-	pricesByBase map[string]map[string]fixedpoint.Value
+	pricesByBase map[string]map[string]float64
 
 	// pricesByQuote is for reversed pairs, like USDT/TWD or BNB/BTC
 	// the reason that we don't store the reverse pricing in the same map is:
 	// expression like (1/price) could produce precision issue since the data type is fixed-point, only 8 fraction numbers are supported.
-	pricesByQuote map[string]map[string]fixedpoint.Value
+	pricesByQuote map[string]map[string]float64
 
 	mu sync.Mutex
 }
@@ -32,8 +33,8 @@ func NewSimplePriceResolver(markets types.MarketMap) *SimplePriceSolver {
 	return &SimplePriceSolver{
 		markets:       markets,
 		symbolPrices:  make(map[string]fixedpoint.Value),
-		pricesByBase:  make(map[string]map[string]fixedpoint.Value),
-		pricesByQuote: make(map[string]map[string]fixedpoint.Value),
+		pricesByBase:  make(map[string]map[string]float64),
+		pricesByQuote: make(map[string]map[string]float64),
 	}
 }
 
@@ -50,39 +51,66 @@ func (m *SimplePriceSolver) Update(symbol string, price fixedpoint.Value) {
 
 	quoteMap, ok2 := m.pricesByBase[market.BaseCurrency]
 	if !ok2 {
-		quoteMap = make(map[string]fixedpoint.Value)
+		quoteMap = make(map[string]float64)
 		m.pricesByBase[market.BaseCurrency] = quoteMap
 	}
 
-	quoteMap[market.QuoteCurrency] = price
+	quoteMap[market.QuoteCurrency] = price.Float64()
 
 	baseMap, ok3 := m.pricesByQuote[market.QuoteCurrency]
 	if !ok3 {
-		baseMap = make(map[string]fixedpoint.Value)
+		baseMap = make(map[string]float64)
 		m.pricesByQuote[market.QuoteCurrency] = baseMap
 	}
 
-	baseMap[market.BaseCurrency] = price
+	baseMap[market.BaseCurrency] = price.Float64()
 }
 
 func (m *SimplePriceSolver) UpdateFromTrade(trade types.Trade) {
 	m.Update(trade.Symbol, trade.Price)
 }
 
-func (m *SimplePriceSolver) inferencePrice(asset string, assetPrice fixedpoint.Value, preferredFiats ...string) (fixedpoint.Value, bool) {
-	// log.Infof("inferencePrice %s = %f", asset, assetPrice.Float64())
+func (m *SimplePriceSolver) BindStream(stream types.Stream) {
+	stream.OnKLineClosed(func(k types.KLine) {
+		m.Update(k.Symbol, k.Close)
+	})
+}
+
+func (m *SimplePriceSolver) UpdateFromTickers(ctx context.Context, ex types.Exchange, symbols ...string) error {
+	for _, symbol := range symbols {
+		// only query the ticker for the symbol that is in the market map
+		_, ok := m.markets[symbol]
+		if !ok {
+			continue
+		}
+
+		ticker, err := ex.QueryTicker(ctx, symbol)
+		if err != nil {
+			return err
+		}
+
+		price := ticker.GetValidPrice()
+		if !price.IsZero() {
+			m.Update(symbol, price)
+		}
+	}
+
+	return nil
+}
+
+func (m *SimplePriceSolver) inferencePrice(asset string, assetPrice float64, preferredFiats ...string) (float64, bool) {
 	quotePrices, ok := m.pricesByBase[asset]
 	if ok {
 		for quote, price := range quotePrices {
 			for _, fiat := range preferredFiats {
 				if quote == fiat {
-					return price.Mul(assetPrice), true
+					return price * assetPrice, true
 				}
 			}
 		}
 
 		for quote, price := range quotePrices {
-			if infPrice, ok := m.inferencePrice(quote, price.Mul(assetPrice), preferredFiats...); ok {
+			if infPrice, ok := m.inferencePrice(quote, price*assetPrice, preferredFiats...); ok {
 				return infPrice, true
 			}
 		}
@@ -93,27 +121,36 @@ func (m *SimplePriceSolver) inferencePrice(asset string, assetPrice fixedpoint.V
 	basePrices, ok := m.pricesByQuote[asset]
 	if ok {
 		for base, basePrice := range basePrices {
-			// log.Infof("base %s @ %s", base, basePrice.String())
 			for _, fiat := range preferredFiats {
 				if base == fiat {
-					// log.Infof("ret %f / %f = %f", assetPrice.Float64(), basePrice.Float64(), assetPrice.Div(basePrice).Float64())
-					return assetPrice.Div(basePrice), true
+					return assetPrice / basePrice, true
 				}
 			}
 		}
 
 		for base, basePrice := range basePrices {
-			if infPrice, ok2 := m.inferencePrice(base, assetPrice.Div(basePrice), preferredFiats...); ok2 {
+			if infPrice, ok2 := m.inferencePrice(base, assetPrice/basePrice, preferredFiats...); ok2 {
 				return infPrice, true
 			}
 		}
 	}
 
-	return fixedpoint.Zero, false
+	return 0.0, false
 }
 
 func (m *SimplePriceSolver) ResolvePrice(asset string, preferredFiats ...string) (fixedpoint.Value, bool) {
+	if len(preferredFiats) == 0 {
+		return fixedpoint.Zero, false
+	} else if asset == preferredFiats[0] {
+		return fixedpoint.One, true
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.inferencePrice(asset, fixedpoint.One, preferredFiats...)
+	fn, ok := m.inferencePrice(asset, 1.0, preferredFiats...)
+	if ok {
+		return fixedpoint.NewFromFloat(fn), ok
+	}
+
+	return fixedpoint.Zero, false
 }
